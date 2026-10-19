@@ -94,7 +94,7 @@ Consequences that shape the whole design:
 | Minimum macOS | **26 Tahoe**. One visual style, Liquid Glass, matching current macOS exactly, with the SwiftUI `glassEffect` APIs, `MenuBarExtra`, `SMAppService`, and current ScreenCaptureKit available without fallbacks |
 | Look | **Liquid Glass** throughout (§5.15): the tab strip, flyout, highlight, and menus use the system glass materials, not custom imitations |
 | Window control | `ApplicationServices` AX API (`AXUIElement`, `AXObserver`) |
-| Window discovery / z-order | `CGWindowListCopyWindowInfo` |
+| Window discovery / z-order | `CGWindowListCopyWindowInfo`; `CGWindowListCreateDescriptionFromArray` for one window's live bounds during a drag (§5.6) |
 | Mouse tracking | `NSEvent.addGlobalMonitorForEvents` (left mouse down/dragged/up) |
 | Animation | SwiftUI springs (`.snappy`, `.smooth`) for our views; `CASpringAnimation` for overlay panels; ScreenCaptureKit snapshots for window proxies (§5.9) |
 | Global hotkeys | [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts) (SPM) |
@@ -107,6 +107,7 @@ Consequences that shape the whole design:
 **Prerequisites:**
 - Install **full Xcode** from the App Store. This Mac currently has only the Command Line Tools. Then run `sudo xcode-select -s /Applications/Xcode.app`.
 - Sign in to Xcode (Settings › Accounts) with your **free Apple ID**. That creates a free "Personal Team" with an **Apple Development** signing certificate.
+- If `security find-identity -v -p codesigning` shows the certificate but "0 valid identities", add Apple's **WWDR G3 intermediate** (`AppleWWDRCAG3.cer` from apple.com/certificateauthority) to the login keychain. This Mac needed it (Phase 0 findings).
 
 **Signing with a free Apple ID:**
 - **During development, the free account is all we need.** Every build is signed with the same Apple Development certificate, which gives Tabsome a **stable identity**. That matters: macOS ties the Accessibility (and Screen Recording) permission to the app's signature. With unsigned or ad-hoc builds, macOS forgets the permission after every rebuild and you'd have to re-grant it each time.
@@ -183,8 +184,9 @@ AX notifications ─► WindowRegistry ─────────────�
 ### 5.1 Detecting that the user is dragging a window
 - Watch global `leftMouseDown`, `leftMouseDragged`, and `leftMouseUp` events.
 - On mouse down, record the window under the cursor (CGWindowList hit test, then a WindowRegistry lookup).
-- If that window fires `kAXMovedNotification` while the button is still down, it's a **title-bar drag** of that window.
-- This ignores text selection, scrolling, and resizing. A resize fires `kAXResizedNotification`, which we ignore for merge purposes.
+- If that window fires `kAXMovedNotification` while the button is still down **and its size is unchanged since mouse-down**, it's a **title-bar drag** of that window. (Resizing from the top or left edge moves the origin too; the size check rules it out.) The first `moved` arrives 120–170 ms into the drag, well inside the dwell.
+- This ignores text selection, scrolling, and resizing. A resize fires `kAXResizedNotification`, which we ignore for merge purposes. Verified with no false positives in Phase 0.
+- The global mouse monitor is delivered through `NSApp`'s event loop, so the main thread must never block or run a nested run loop.
 
 ### 5.2 Finding the drop target and the "middle"
 - During the drag, read the on-screen window list front to back (`CGWindowListCopyWindowInfo(.optionOnScreenOnly)`, `kCGWindowLayer == 0`). Pick the first window under the cursor that:
@@ -214,7 +216,7 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
 
 ### 5.4 Merge
 1. If the target isn't yet in a group, create one with the target's frame, **shrunk on the strip's side by the strip's thickness** so the strip doesn't cover app content:
-   - Top: 28 pt off the top
+   - Top: 32 pt off the top (a plain title bar's height, measured in Phase 0)
    - Left: 40 pt off the left
 
    The outer bounds (window plus strip) stay where the original window was.
@@ -225,7 +227,8 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
 6. Animate the snap-in with the proxy technique in §5.9.
 
 ### 5.5 Keeping inactive tabs hidden (`Concealment`)
-- **Default (stacking):** inactive members share the exact frame and sit directly beneath the active window. Switching is instant (just `AXRaise`), and Mission Control still shows real windows.
+- **Default (stacking):** inactive members share the exact frame and sit directly beneath the active window. Switching = `AXRaise` the window, then `NSRunningApplication.activate()` (`AXRaise` alone doesn't cross apps). That measured 31–34 ms median in Phase 0, with nothing showing through, and Mission Control still shows real windows.
+- **Snapping apps:** some apps round the frame they're given (Terminal snaps to its character grid). The group frame is the frame the **strictest member actually took**, re-applied to the others, so no back window peeks out at an edge.
 - **Corner parking** handles members that can't match the group frame (fixed-size windows, or a minimum size larger than the group). They're moved to the screen's bottom-right corner, leaving 1 px on screen, while inactive. This is the approach AeroSpace uses. They return to the group frame when activated.
 - **Rejected options:**
   - *Minimize*: slow genie animation and Dock clutter.
@@ -238,7 +241,10 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
   - `collectionBehavior = [.managed, .fullScreenNone]`
   - `hidesOnDeactivate = false`
   - clicks don't steal focus from the tabbed app
-- **Z-order:** the strip must sit right above the group's window but *below* any other window covering it, so we can't use a floating level. Keep it at normal level and call `order(.above, relativeTo: activeWindowCGWindowID)` whenever focus or order changes. ⚠️ Validate in the Phase 0 spike (§7). Fallback: compute occlusion from CGWindowList and hide or clip the strip whenever another window overlaps it.
+- **Z-order (verified in Phase 0):** the strip must sit right above the group's window but *below* any other window covering it, so we can't use a floating level. Keep it at normal level and call `order(.above, relativeTo: activeWindowCGWindowID)` whenever focus or order changes.
+  - **Settle burst:** apps raise their window 40–50 ms *after* the activation and focus notifications arrive, so re-ordering once isn't enough. After any focus or activation notification for a member, check the CG order once per frame for up to 300 ms and re-order whenever the strip isn't directly above the active window. That's event-triggered, not idle polling.
+  - Set `animationBehavior = .none` on overlay panels (the default fades `orderOut` for ~270 ms).
+  - The occlusion-based hide/clip fallback isn't needed.
 - **Placement** is a `TabPlacement` enum (`.top`, `.left`) stored in settings. One `TabStripView` takes the placement and lays out horizontally or vertically. The strip panel's frame and the group's content frame both come from one pure function, `StripLayout.frames(outer:placement:)`, so the geometry is unit-tested once for both modes.
 - **Top mode contents (SwiftUI):**
   - the **group window buttons** (red, yellow, green) at the far left, laid out like Safari's tab bar, with the **exact size, spacing, and inset of the system's own buttons on the running macOS** (measured from a real window in Phase 0, not hard-coded from memory; §5.11). Tabs start after them
@@ -261,7 +267,7 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
 - **Changing placement in Settings** re-lays out every live group right away: give back the old strip's space, take the new side's space, and rebuild each strip.
 - **Colors** come from Tabsome's Appearance setting (System, Light, or Dark; §5.13) and change live.
 - Both modes support **unlimited tabs** through the overflow behavior above.
-- Follows the active window live during moves and resizes. The strip tracks on every `kAXMovedNotification`, and inactive members are re-synced on mouse up so we don't flood other apps with AX writes mid-drag.
+- Follows the active window live during moves and resizes. **During a drag**, AX `moved` notifications are too sparse and the AX frame lags (Phase 0), so on each mouse-dragged event (at most once per display frame) the strip reads the dragged window's WindowServer bounds with `CGWindowListCreateDescriptionFromArray` (≈0.7 ms) and moves to them. Outside drags (AX-driven moves and resizes) it tracks `kAXMovedNotification`/`kAXResizedNotification`. Inactive members are re-synced on mouse up so we don't flood other apps with AX writes mid-drag.
 
 ### 5.7 Tab interactions
 Every row matches Safari/Chrome unless it says otherwise (§1, "works like browser tabs").
@@ -338,10 +344,13 @@ Every row matches Safari/Chrome unless it says otherwise (§1, "works like brows
 | Top ↔ Left change | The strip slides out on one edge and in on the other with `Motion.smooth` |
 
 **How it's technically possible:** we can't run Core Animation on another app's window, and AX frame writes can't be driven at 60–120 fps reliably. So window motion uses **proxies**:
-1. Capture a snapshot of the window with ScreenCaptureKit (`SCScreenshotManager`).
+1. Capture a snapshot of the window with ScreenCaptureKit (`SCScreenshotManager`). It takes 50–140 ms, so for snap-in it's **captured during the dwell**, before mouse-up.
 2. Show the snapshot in a borderless overlay at the window's current frame, and animate the overlay with the spring.
-3. Underneath, move the real window to its final frame with one AX write while it's covered.
-4. When the spring settles, cross-fade the proxy out over 0.1 s to reveal the real window.
+3. Underneath, move the real window to its final frame with one AX write while it's hidden:
+   - **cover:** when the destination is covered by the group's active window (snap-in), activate that window so the real one goes behind it, then move.
+   - **park:** when nothing covers the destination (flyout presets), corner-park the real window during the spring, then move it at the end.
+4. When the real window has landed (within 8 pt and unchanged across two polls, never an exact match), take a **second snapshot at the final size** (ScreenCaptureKit captures covered windows) and cross-fade the proxy's contents to it during the spring. A snapshot stretched to a new size reads as "scaled up" (seen in Phase 0).
+5. Retarget the spring to the frame the window actually took (apps like Terminal round it), then raise the real window and fade the proxy out over 0.1 s.
 
 This needs the **Screen Recording permission**, which is **optional** and requested in onboarding with a plain explanation (nothing is saved or sent). Without it, the proxy is a glass card showing the app's icon and name. That's still smooth, just not a live picture. Tabsome's own overlays (highlight, strip, tabs) are ours, so they animate natively with no permission needed.
 
@@ -533,8 +542,8 @@ Tabsome needs broad system access and talks to every running app. That's normal 
 
 | # | Risk | Rule | Phase |
 |---|---|---|---|
-| P1 | **A frozen app freezes Tabsome.** AX calls are synchronous messages to the target app, and they block for up to 6 s by default if that app is hung | Set `AXUIElementSetMessagingTimeout` to about 0.5 s on every element. Run **each app's AX work and AXObserver on its own thread**, so a hung app only stalls its own thread. The main thread never makes AX calls; it only receives results. If an app keeps timing out, mark it "unresponsive", ignore it until it recovers, and leave its tabs alone. (This only works one way: Tabsome can't freeze other apps, because they never wait on it) | 1 |
-| P2 | Idle CPU and battery drain | Everything is event-driven, with **no polling and no repeating timers while idle**. The one exception is the Dock badge check (§5.14): every 3 s, one call, only while a group exists. With no groups, nothing runs at all. `CGWindowListCopyWindowInfo` runs only during an active drag, at most 30 times a second. The display link runs only while something is animating. Budget: **0% CPU and under 50 MB of memory when idle** | 1, checked in 6 |
+| P1 | **A frozen app freezes Tabsome.** AX calls are synchronous messages to the target app, and they block until the messaging timeout if that app is hung (1.5 s by default on macOS 27; older docs say 6 s) | Set `AXUIElementSetMessagingTimeout` to about 0.5 s on every element. Run **each app's AX work and AXObserver on its own thread**, so a hung app only stalls its own thread. The main thread never makes AX calls; it only receives results. If an app keeps timing out, mark it "unresponsive", ignore it until it recovers, and leave its tabs alone. (This only works one way: Tabsome can't freeze other apps, because they never wait on it) | 1 |
+| P2 | Idle CPU and battery drain | Everything is event-driven, with **no polling and no repeating timers while idle**. The one exception is the Dock badge check (§5.14): every 3 s, one call, only while a group exists. With no groups, nothing runs at all. `CGWindowListCopyWindowInfo` runs only during an active drag, at most 30 times a second. The single-window bounds query that keeps the strip on a dragged window (§5.6) runs only during that drag, at most once per display frame. The post-activation settle burst (§5.6) runs at most 300 ms per focus change. The display link runs only while something is animating. Budget: **0% CPU and under 50 MB of memory when idle** | 1, checked in 6 |
 | P3 | Making other apps redraw too much | During a drag or resize, only Tabsome's strip moves live. Inactive members are re-synced **once, on mouse up**. Stacking (the default way of hiding inactive tabs) lets macOS tell covered windows they're hidden so apps like Safari slow their rendering. Corner-parked windows still count as visible, so parking stays the fallback, never the default | 3 |
 | P4 | **Fights with other window managers** (Rectangle, Stage Manager, an app's own window code) looping and burning CPU | **Loop detection:** if a member's frame is changed against Tabsome more than 3 times in 1 s, stop writing to it, remove it from its group, and show a one-time notice naming the app | 5 |
 | P5 | Reacting to its own moves | Every AX write records the frame it expects with a short expiry. "Moved" or "resized" notifications that match an expected frame are ignored | 3 |
@@ -558,6 +567,27 @@ Small throwaway command-line or app targets that prove:
 9. **Cross-app drag destination:** a non-activating panel receives `draggingEntered` for a file dragged from Finder, and declining the drop still lets it land in the window underneath (§5.14).
 
 **Exit:** a short findings note added to this file, with the hiding and z-order approaches confirmed.
+
+#### Phase 0 findings (2026-10-19, macOS 27.0.1, Xcode 27.1, Swift 6.4)
+Spikes live in `Spikes/` (see its README). They're one host app, `TabsomeSpikes.app`, so the permissions are granted once, plus a cooperative `SpikeHelper.app`. Raw logs: `Spikes/out/logs/`. **Both exit questions are answered: the strip uses `order(.above, relativeTo:)` (no occlusion fallback needed), and inactive tabs are hidden by stacking.**
+
+| # | Spike | Result | Key measurements | Chosen approach / plan change |
+|---|---|---|---|---|
+| 1 | AX move/resize | ✅ Safari, Chrome, Firefox, Finder, Terminal, VS Code (Electron), Notes, TextEdit. Xcode: only its fixed-size welcome window (move works, size not settable). ⚠️ **Slack and a Java app aren't installed, so they're untested**; VS Code covers Electron. | Move call 0.4–10 ms, lands in ≤3.5 ms. Resize call 3–42 ms, lands in ≤26 ms. Terminal snaps to its character grid (asked 807×458, got 804×454). Notes enforces a ~680 pt minimum height. `AXEnhancedUserInterface` was off in every app. | Size → position → size works everywhere. Treat "can't set size" (Xcode welcome) and min-size clamps (Notes) as misfits → corner parking (§5.5). Re-read the frame after every write (§8). |
+| 2 | `_AXUIElementGetWindow` | ✅ 17/17 standard windows mapped, with pid and bounds matching CGWindowList. Only the Finder desktop (`AXDesktop`) has no ID, as expected. | 0.16 ms average, ≤1 ms max. | Use it as planned. ⚠️ CGWindowList reports **interpolated bounds during a window's open animation** (≈0.5 s), so the registry must not compare AX and CG frames for a just-created window until it settles. |
+| 3 | **Overlay z-order** | ✅ **Primary approach works.** A normal-level, non-activating `NSPanel` with `order(.above, relativeTo: otherAppsWindowID)` sits directly above the other app's window. Other apps' windows cover it, and `relativeTo` is honoured even when the target is behind another window. Clicking the strip doesn't activate Tabsome or steal focus. Verified with Terminal/Finder, Safari/VS Code, Chrome/Safari, VS Code/Notes, and by hand. | ⚠️ **Race found:** the activation notifications (`AXApplicationActivated`, `AXFocusedWindowChanged`, `NSWorkspace.didActivate`) arrive 6–22 ms after activation, but the app raises its window 40–50 ms after. Re-ordering only on the notification left the strip **behind** the covering window (Safari: 82/82 samples). | **Settle burst:** after any focus or activation notification for a group member, re-check the CG order once per frame for up to 300 ms and re-order whenever the strip isn't directly above the active window. That brought the strip to ≤1 wrong sample (≈1 ms) in every pair. It's event-triggered, not idle polling (P2). Strip panels need `animationBehavior = .none`; with the default, `orderOut` fades for ~270 ms. |
+| 3b | Strip following a live drag | ⚠️ AX `moved` notifications during a drag are sparse (10–15 per multi-second hand drag) and the AX frame lags the real window by a median 22–82 pt, so a strip driven by them visibly lags (hand-checked). Mouse-delta prediction "ran ahead": the window only starts moving after a 13–41 pt drag threshold and then doesn't track the cursor 1:1 (up to 57 pt off). | WindowServer bounds per window through `CGWindowListCreateDescriptionFromArray` cost 0.6–0.9 ms median (≤10 ms max). | **During a detected drag, set the strip from the dragged window's WindowServer bounds on each mouse-dragged event** (at most once per display frame). Hand check: "slight trail" (about one frame). Velocity extrapolation is an optional Phase 3 refinement. Changes §5.6 and §6.2 P2. |
+| 4 | Title-bar drag detection | ✅ No false positives. Synthesized Terminal + Finder: 12/12 (title-bar drag, content/text selection, bottom-right / top-left / left-edge resize, stationary click). By hand (Safari, Chrome, VS Code): 3/3 drags, 2/2 resizes, 13/13 clicks and selections correctly NONE. | First `moved` arrives 120–170 ms after the drag starts (fine against the 450 ms dwell). The resize zone extends a few pt **outside** the window's frame, so the hit test picks the window behind; that's harmless (the resize notifications go to a different window, so it's NONE). | §5.1 as planned, plus one rule: a `moved` counts as a drag only if the window's **size is unchanged** since mouse-down. `NSEvent.addGlobalMonitorForEvents` works (605 vs 608 events against a listen-only CGEventTap). ⚠️ Global monitors are delivered through `NSApp`'s event loop, so **never block the main thread in a nested run loop** (spin waits silently starve them). |
+| 5 | Stacking concealment | ✅ Instant enough, and nothing shows through: 0 of ~5,300 samples during switching had any other window or the desktop on top of the stack. Hand check: no flicker on the final run (one earlier run looked like a flash, most likely the active/inactive title-bar change any app switch has). | `AXRaise` + `NSRunningApplication.activate()`: **24/24 switches**, median 31–34 ms, max 58 ms. `AXFrontmost = true`: 7/12 (Terminal), 12/12 (Safari/Code). `AXRaise` alone: 6/12 (it doesn't cross apps). | Switching = `AXRaise` the window, then `NSRunningApplication.activate()`; cooperative activation doesn't block an LSUIElement app on macOS 27. The tab-switch budget is 50 ms median (§9), since the max is set by the app. Grid-snapping apps (Terminal) end up a few pt off the group frame, so a back window can peek out at an edge. The group frame becomes **the snapped frame the strictest member actually took**, applied to everyone else (§8). |
+| 6 | Proxy animation | ✅ Mechanism works in Safari, Terminal, and VS Code. ⚠️ Hand check: during a size change the proxy looks **"scaled up"**, because the snapshot is stretched to the new size. A cross-fade fix is built, but the hand comparison was too fast to judge, so it **needs a slow side-by-side check in the Phase 3 motion pass**. | `SCShareableContent` 20–35 ms + `SCScreenshotManager` capture 28–107 ms (the first capture is the slowest). The real window lands 16–53 ms after the AX write. Terminal lands 2×6 pt off the target. Spring (`perceptualDuration 0.3, bounce 0.15`) settles in 442 ms. Re-raise 1–45 ms. | **Pre-capture during the dwell** (the dragged window is known before mouse-up). Two choreographies: **cover** (destination covered by the group's window: activate the cover, move the real window behind it, spring, raise, fade) and **park** (nothing covers the destination: corner-park, spring, move, wait for landing, fade). Landing = within 8 pt and unchanged for two polls, never an exact match. **Cross-fade to a second snapshot taken at the final size** (ScreenCaptureKit captures the covered window) so nothing is shown stretched at rest. Retarget the spring to the real landed frame before revealing. Changes §5.9. |
+| 7 | Hung-app isolation | ✅ Helper blocked its main thread for 10 s. With one thread and run loop per app and a 0.5 s timeout: Terminal and Finder workers kept working (95 ops each, max 6 ms), and the main thread's max heartbeat gap was 18 ms. | Hung app's calls return `cannotComplete` after 505 ms. Marked unresponsive at 0.54 s, recovered 0.58 s after the hang ended, with back-off to 1 probe/s. Control: a naive main-thread AX call blocked the main thread 1.5 s (that's the default timeout seen on macOS 27; the plan assumed 6 s). | §6.2 P1 as planned. |
+| 8 | macOS look | ✅ Recorded in `Spikes/Findings/Metrics.swift` (to move into the app in Phase 1). | Window buttons 14 pt, 23 pt pitch (9 pt gap); inset 9 / centre 16 in a plain 32 pt title bar (12/20 compact, 19/26 in Safari's and Finder's 52 pt toolbar). Native tab bar 28 pt, Finder tab buttons 24 pt. Corner radius 16 pt. AX reports buttons as 16×16 (1 pt hit slop). | **Top strip height = 32 pt** (a plain title bar), so the group buttons sit exactly where macOS puts them. The plan's earlier 28 pt was a guess (§5.4). Left strip stays 40 pt (no system equivalent to measure). |
+| 9 | Cross-app drag destination | ✅ A background app's non-activating panel gets `draggingEntered` and keeps getting `draggingUpdated` (84–233 per hover) after returning no operation. Spring-loading raised the background window mid-drag, and the drop landed in it (automated, cross-process). By hand: Finder file → strip turned teal after ~0.5 s → dropped in a folder, landed. | Spring fires 515–531 ms after entering. `performDragOperation` never called. | §5.14 as planned. Register for file URLs, URLs, strings, images, PDF, RTF/HTML, and file promises; return `[]` from `draggingEntered`/`Updated`; override `wantsPeriodicDraggingUpdates` (true). |
+
+**Setup notes for Phase 1:**
+- **Signing:** the free Personal Team certificate was "not valid" until Apple's **WWDR G3 intermediate** was added to the login keychain (only the 2023-expired one was present). After that, the designated requirement is `identifier … and certificate leaf = Apple Development: …`, and both TCC grants survived ~20 rebuilds. Grants made while the app was ad-hoc signed didn't carry over; the entries had to be removed and re-added once.
+- **"Prefer tabs: Always"** is set on this Mac (`AppleWindowTabbingMode`). AppKit apps merge new windows into **native** tabs, and the background native tabs **aren't exposed as AX windows**. Tabsome treats a natively tabbed window as one window. Phase 1's test-harness app must set `tabbingMode = .disallowed` (SpikeHelper had to).
+- **Language mode:** spikes compile in Swift 5 mode with the Command Line Tools `swiftc` (the Xcode license wasn't accepted yet). Product code is Swift 6 strict concurrency in an Xcode project, as planned.
 
 ### Phase 1 — Foundation
 - **git repository** (this folder isn't one yet) with a Swift/Xcode `.gitignore`. Commit `PLAN.md` first.
@@ -670,7 +700,7 @@ Small throwaway command-line or app targets that prove:
 
 | Risk | Mitigation |
 |---|---|
-| Overlay can't be ordered relative to another app's window | Phase 0 spike. Fallback: occlusion-based hide/clip of the strip |
+| Overlay can't be ordered relative to another app's window | **Resolved in Phase 0:** `order(.above, relativeTo:)` works with another app's window, plus the post-activation settle burst (§5.6). The occlusion-based hide/clip fallback isn't needed |
 | Apps that resize asynchronously or snap to a grid (Terminal, iTerm) | Tolerate a few pt of mismatch. Re-read the actual frame after writing it and base the group frame on what the active window really ended up as |
 | Windows with min/max sizes or fixed sizes | Group frame = largest common size that fits. Misfits get corner-parked when inactive |
 | AX latency or flakiness in some apps (Electron, Java), or a hung app | One thread per app with short timeouts (§6.2 P1). Retry with backoff, coalesce writes, keep AX calls off hot paths during the drag |
