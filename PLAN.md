@@ -13,7 +13,7 @@ A macOS **menu bar app** that lets you group any windows (from any apps) into on
 1. Drag a window by its title bar over the **middle** of another window.
 2. **Pause** for a moment, and the target highlights with a "drop to tab" preview.
 3. **Let go**, and the two windows become tabs of one window, with a tab strip attached to the window.
-4. Keep going: a group can hold **any number of tabs**, from any mix of apps. Dropping a window straight onto an existing tab strip adds it right away, at the spot you drop it.
+4. Keep going: a group can hold **up to 50 tabs**, from any mix of apps. (A quiet safety limit: a full group simply stops accepting more, with no alert. It doesn't highlight as a drop target, shows no insertion marker, and hides its "+" button.) Dropping a window straight onto an existing tab strip adds it right away, at the spot you drop it.
 
 **Tab position** (Settings › Tabs, applies to all groups live):
 - **Top** (default): a horizontal strip above the window. Each tab shows the app icon and the **full app name** (e.g. "Safari", "Visual Studio Code").
@@ -266,8 +266,8 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
   - "to the right" in menus and close behavior means "below" in this mode
 - **Changing placement in Settings** re-lays out every live group right away: give back the old strip's space, take the new side's space, and rebuild each strip.
 - **Colors** come from Tabsome's Appearance setting (System, Light, or Dark; §5.13) and change live.
-- Both modes support **unlimited tabs** through the overflow behavior above.
-- Follows the active window live during moves and resizes. **During a drag**, AX `moved` notifications are too sparse and the AX frame lags (Phase 0), so on each mouse-dragged event (at most once per display frame) the strip reads the dragged window's WindowServer bounds with `CGWindowListCreateDescriptionFromArray` (≈0.7 ms) and moves to them. Outside drags (AX-driven moves and resizes) it tracks `kAXMovedNotification`/`kAXResizedNotification`. Inactive members are re-synced on mouse up so we don't flood other apps with AX writes mid-drag.
+- Both modes handle **up to 50 tabs** (the quiet safety limit in §1) through the overflow behavior above.
+- Follows the active window live during moves and resizes. **During a drag**, AX `moved` notifications are too sparse and the AX frame lags (Phase 0), so on each mouse-dragged event (at most once per display frame) the strip reads the dragged window's WindowServer bounds with `CGWindowListCreateDescriptionFromArray` (≈0.7 ms) and moves to them. Outside drags (AX-driven moves and resizes) it tracks `kAXMovedNotification`/`kAXResizedNotification`. Inactive members are re-synced on mouse up so we don't flood other apps with AX writes mid-drag. Until then they're **tucked** into a screen corner (one write each when the move or resize starts), because the moving front window no longer covers them (found in Phase 4).
 
 ### 5.7 Tab interactions
 Every row matches Safari/Chrome unless it says otherwise (§1, "works like browser tabs").
@@ -544,7 +544,7 @@ Tabsome needs broad system access and talks to every running app. That's normal 
 |---|---|---|---|
 | P1 | **A frozen app freezes Tabsome.** AX calls are synchronous messages to the target app, and they block until the messaging timeout if that app is hung (1.5 s by default on macOS 27; older docs say 6 s) | Set `AXUIElementSetMessagingTimeout` to about 0.5 s on every element. Run **each app's AX work and AXObserver on its own thread**, so a hung app only stalls its own thread. The main thread never makes AX calls; it only receives results. If an app keeps timing out, mark it "unresponsive", ignore it until it recovers, and leave its tabs alone. (This only works one way: Tabsome can't freeze other apps, because they never wait on it) | 1 |
 | P2 | Idle CPU and battery drain | Everything is event-driven, with **no polling and no repeating timers while idle**. The one exception is the Dock badge check (§5.14): every 3 s, one call, only while a group exists. With no groups, nothing runs at all. `CGWindowListCopyWindowInfo` runs only during an active drag, at most 30 times a second. The single-window bounds query that keeps the strip on a dragged window (§5.6) runs only during that drag, at most once per display frame. The post-activation settle burst (§5.6) runs at most 300 ms per focus change. The display link runs only while something is animating. Budget: **0% CPU and under 50 MB of memory when idle** | 1, checked in 6 |
-| P3 | Making other apps redraw too much | During a drag or resize, only Tabsome's strip moves live. Inactive members are re-synced **once, on mouse up**. Stacking (the default way of hiding inactive tabs) lets macOS tell covered windows they're hidden so apps like Safari slow their rendering. Corner-parked windows still count as visible, so parking stays the fallback, never the default | 3 |
+| P3 | Making other apps redraw too much | During a drag or resize, only Tabsome's strip moves live. Inactive members are tucked into a screen corner when it starts (they'd be exposed otherwise) and re-synced **once, on mouse up**: two writes per tab per interaction. Stacking (the default way of hiding inactive tabs) lets macOS tell covered windows they're hidden so apps like Safari slow their rendering. Corner-parked windows still count as visible, so parking stays the fallback, never the default | 3 |
 | P4 | **Fights with other window managers** (Rectangle, Stage Manager, an app's own window code) looping and burning CPU | **Loop detection:** if a member's frame is changed against Tabsome more than 3 times in 1 s, stop writing to it, remove it from its group, and show a one-time notice naming the app | 5 |
 | P5 | Reacting to its own moves | Every AX write records the frame it expects with a short expiry. "Moved" or "resized" notifications that match an expected frame are ignored | 3 |
 | P6 | Slow memory leaks from AX handles and observers | One owner per app (`AXApp`) holds every AX handle and observer for that app and tears them all down when the app quits. Test: launch and quit 100 apps with the Leaks instrument attached; memory must return to baseline | 1, checked in 5 |
@@ -681,7 +681,7 @@ Deviations and notes for later phases:
 - Grouped windows can't yet be dropped onto another group (Phase 4: merge a group into a group).
 - Synthesized checks activate other apps' windows, so they can catch the user's keystrokes; run them only while hands are off the keyboard (it happened once, harmlessly, with a scratch file).
 
-### Phase 4 — Unlimited tabs and full tab interactions
+### Phase 4 — Many tabs (up to 50) and full tab interactions
 - Add to an existing group, and merge a group into a group.
 - Reorder, and drop a tab or window onto another group's **tab strip** at a chosen position, with no pause and an insertion marker (§5.2).
 - Chrome-style right-click menu (§5.7), including Close Tabs to the Right.
@@ -698,6 +698,35 @@ Deviations and notes for later phases:
 - **Spring-loaded tabs** and **hover previews** (§5.14), in both placements, with the icon-card fallback when Screen Recording is denied.
 
 **Demo:** a group of 8+ windows from 5+ apps. Every interaction in §5.7 works in both Top and Left modes.
+
+#### Phase 4 progress
+Built in four parts, each committed once checked by hand: **4a** tab management, **4b** renaming, shortcuts, and Left placement, **4c** the Move & Resize flyout, and **4d** spring-loaded tabs and hover previews.
+
+**4a (2026-10-20): done.** Verified by hand:
+- dropping a window onto a strip at a position (no pause, with an insertion marker)
+- sideways reorder
+- moving a tab between groups, and tearing it onto another window's middle
+- merging a whole group into another
+- "+" with the open-windows menu
+- the right-click menu (Close Tab, Close Other Tabs, Close Tabs to the Right, Move Tab to New Window)
+- the width freeze while closing tabs
+- double-clicking the empty strip area (follows System Settings' title-bar action)
+- icon-only tabs and the » overflow menu
+- the quiet 50-tab limit: a full group isn't a drop target, shows no marker, and hides "+"
+
+Found by hand and fixed:
+- **Background tabs showed during moves and resizes:** they were only hidden by the front window, so moving it exposed them. They're now tucked into a screen corner for the duration (P3, §5.6).
+- **Parked windows could spill onto another display:** corner parking now picks a corner where the window doesn't land on another display (this also affected yellow-minimize).
+
+101 unit tests in total. New ones cover:
+- the strip layout (full → icon-only → overflow, with the active tab always visible), insertion indexes, and the width freeze
+- the `TabGroup` limit, insert, move, and close-others/right
+- the dwell machine's strip cases
+- strip targets in the resolver
+- group-into-group merges, drops at a strip position, reorder, Move Tab to New Window, and the "+" candidates
+- tucking, and parking-corner choice across displays
+
+Deferred, by plan: rename items in the right-click menu (4b), and Left mode's "Close Tabs Below" wording (4b).
 
 ### Phase 5 — Robustness
 - Corner-parking fallback for misfit windows.

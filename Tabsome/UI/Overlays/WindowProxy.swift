@@ -127,6 +127,12 @@ final class WindowProxy {
         layer.add(fade, forKey: "contents")
     }
 
+    /// Gone at once (a drop that didn't happen); releases the snapshot (S3).
+    func dismiss() {
+        panel.orderOut(nil)
+        layer.contents = nil
+    }
+
     /// Reveal the real window: fade out, then release the panel and the snapshot (S3).
     func fadeOut() async {
         let fade = CABasicAnimation(keyPath: "opacity")

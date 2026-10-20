@@ -15,7 +15,9 @@ struct DropTargetResolverTests {
     var windows: [ScreenWindow] { [menu, dragged, overlay, popup, target, behind] }
 
     func resolve(_ p: CGPoint, eligible: Set<CGWindowID> = [20, 30]) -> DropTargetResolver.Target? {
-        DropTargetResolver.resolve(cursor: p, windows: windows, dragged: dragged.id, ownPID: ownPID, isEligible: { eligible.contains($0) })
+        guard case .window(let t) = DropTargetResolver.resolve(cursor: p, windows: windows, dragged: dragged.id, ownPID: ownPID,
+                                                                 isEligible: { eligible.contains($0) }) else { return nil }
+        return t
     }
 
     @Test func skipsTheDraggedWindowOverlaysAndIneligiblePopups() {
@@ -37,5 +39,21 @@ struct DropTargetResolverTests {
     @Test func nothingEligibleMeansNoTarget() {
         #expect(resolve(CGPoint(x: 500, y: 370), eligible: []) == nil)
         #expect(resolve(CGPoint(x: 1800, y: 1800)) == nil)
+    }
+
+    @Test func aStripUnderTheCursorWinsWithItsInsertIndex() {
+        let strip = ScreenWindow(id: 40, pid: ownPID, layer: 0, bounds: CGRect(x: 200, y: 168, width: 600, height: 32))
+        let list = [dragged, strip, target]
+        let hit = DropTargetResolver.resolve(cursor: CGPoint(x: 400, y: 180), windows: list, dragged: dragged.id, ownPID: ownPID,
+                                             strip: { $0.id == 40 ? .init(target: 20, index: 1) : nil }, isEligible: { _ in true })
+        #expect(hit == .strip(.init(target: 20, index: 1)))
+        #expect(hit?.dwellTarget == .strip(20, index: 1))
+    }
+
+    @Test func aStripThatCantTakeTheDropIsSkipped() {
+        let strip = ScreenWindow(id: 40, pid: ownPID, layer: 0, bounds: CGRect(x: 200, y: 168, width: 600, height: 400))
+        let hit = DropTargetResolver.resolve(cursor: CGPoint(x: 500, y: 400), windows: [strip, target], dragged: dragged.id, ownPID: ownPID,
+                                             strip: { _ in nil }, isEligible: { _ in true })
+        #expect(hit == .window(.init(id: 20, frame: target.bounds, inMiddle: true)))
     }
 }

@@ -39,6 +39,7 @@ final class AppModel {
 
     private func start() {
         registry.start()
+        groups.targeting = drag
         drag.start()
     }
 

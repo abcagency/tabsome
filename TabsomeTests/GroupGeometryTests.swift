@@ -56,3 +56,27 @@ struct GroupGeometryTests {
         #expect(!e.isExpected(requested, for: 6, now: 10.5))
     }
 }
+
+struct ParkingTests {
+    let main = CGRect(x: 0, y: 0, width: 2560, height: 1440)
+    let size = CGSize(width: 800, height: 600)
+
+    @Test func aloneTheWindowGoesPastTheBottomRightCorner() {
+        #expect(GroupGeometry.parkingOrigin(screen: main, size: size) == CGPoint(x: 2559, y: 1439))
+    }
+
+    @Test func avoidsSpillingOntoADisplayToTheRight() {
+        let right = CGRect(x: 2560, y: 0, width: 1920, height: 2400) // tall enough to catch bottom-right
+        let origin = GroupGeometry.parkingOrigin(screen: main, size: size, otherScreens: [right])
+        #expect(CGRect(origin: origin, size: size).intersection(right).isNull)
+        #expect(origin == CGPoint(x: 1 - 800, y: 1439)) // bottom-left instead
+    }
+
+    @Test func avoidsDisplaysToTheRightAndBelow() {
+        let right = CGRect(x: 2560, y: 0, width: 1920, height: 1080)
+        let below = CGRect(x: -500, y: 1440, width: 3000, height: 1200)
+        let origin = GroupGeometry.parkingOrigin(screen: main, size: size, otherScreens: [right, below])
+        let r = CGRect(origin: origin, size: size)
+        #expect(r.intersection(right).isNull && r.intersection(below).isNull)
+    }
+}

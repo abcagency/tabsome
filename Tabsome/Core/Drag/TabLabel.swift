@@ -17,9 +17,10 @@ enum TabLabel {
         return "\(entry.app.name) — \(title)"
     }
 
-    /// The preview strip: the target's tabs, then the dragged window appended at the end (§5.3).
-    static func ghostTabs(existing: [WindowRegistry.Entry], adding new: WindowRegistry.Entry) -> [GhostTab] {
-        let all = existing + [new]
-        return all.map { GhostTab(id: $0.id, label: label(for: $0, among: all), pid: $0.app.pid, isNew: $0.id == new.id) }
+    /// The preview strip: the target's tabs, then the dragged window (or group) appended (§5.3).
+    static func ghostTabs(existing: [WindowRegistry.Entry], adding new: [WindowRegistry.Entry]) -> [GhostTab] {
+        let all = existing + new
+        let newIDs = Set(new.map(\.id))
+        return all.map { GhostTab(id: $0.id, label: label(for: $0, among: all), pid: $0.app.pid, isNew: newIDs.contains($0.id)) }
     }
 }

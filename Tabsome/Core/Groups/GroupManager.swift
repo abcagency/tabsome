@@ -16,6 +16,8 @@ final class GroupManager {
     @ObservationIgnored private var liveDrag: (group: UUID, startContent: CGRect)?
     @ObservationIgnored private var stripDrag: (group: UUID, startContent: CGRect, startMouse: CGPoint, inFlight: Bool, pending: CGPoint?)?
     @ObservationIgnored private var tearOff: (window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize)?
+    /// Groups whose background tabs are tucked away while the group moves or resizes.
+    @ObservationIgnored private var tucked: Set<UUID> = []
     @ObservationIgnored private var workspaceObserver: NSObjectProtocol?
     /// Apps Tabsome itself just activated: their focus events aren't the user switching tabs.
     @ObservationIgnored private var ownActivation: [pid_t: TimeInterval] = [:]
@@ -23,6 +25,8 @@ final class GroupManager {
     @ObservationIgnored private let registry: WindowRegistry
     /// Off in tests; proxies need a window server.
     @ObservationIgnored var animates = true
+    /// The window server's current bounds for a window (replaced in tests).
+    @ObservationIgnored var windowBounds: (CGWindowID) -> CGRect? = { ScreenWindows.bounds(of: $0) }
     /// Asked before the red button closes every tab (PLAN.md §5.11); returns false to cancel.
     @ObservationIgnored var confirmCloseAll: ((_ count: Int) -> Bool)?
 
@@ -45,51 +49,112 @@ final class GroupManager {
 
     // MARK: Merge (PLAN.md §5.4)
 
-    /// Tabs `dragged` into `target`'s window (or `target`'s group). `dropFrame` is where the
-    /// dragged window was let go; `snapshot` was captured during the dwell (§5.9).
-    func merge(dragged d: CGWindowID, into t: CGWindowID, dropFrame: CGRect?, snapshot: CGImage?) {
-        guard groupOf[d] == nil, d != t, let dEntry = registry.windows[d], let tEntry = registry.windows[t] else { return }
+    /// Tabs `dragged` into `target`'s window (or `target`'s group), at the end or at a strip
+    /// position. `dropFrame` is where the dragged window was let go; `snapshot` was captured
+    /// during the dwell (§5.9).
+    func merge(dragged d: CGWindowID, into t: CGWindowID, at index: Int? = nil, dropFrame: CGRect?, snapshot: CGImage?) {
+        guard groupOf[d] == nil else { return }
+        absorb([d], active: d, into: t, at: index, dropFrame: dropFrame, proxy: makeProxy(for: d, image: snapshot, at: dropFrame))
+    }
+
+    /// A whole group dragged by its active window's title bar onto another window or group:
+    /// all its tabs join, in order, and its active tab stays active (§7 Phase 4).
+    func mergeGroup(_ source: UUID, into t: CGWindowID, at index: Int? = nil, dropFrame: CGRect?, snapshot: CGImage?) {
+        guard let g = groups[source], groupOf[t] != source else { return }
+        liveDrag = nil
+        let members = g.members, active = g.activeID
+        if !canAbsorb(members.count, into: t) { return memberDragEnded(active) }
+        dropGroup(source)
+        absorb(members, active: active, into: t, at: index, dropFrame: dropFrame, proxy: makeProxy(for: active, image: snapshot, at: dropFrame))
+    }
+
+    /// Adds `windows` to `t`'s group (or forms one with `t`), activating `active`. The active
+    /// window's proxy springs from where it was to the group frame while the real windows move
+    /// into place behind the cover, the window being tabbed into (§5.4, §5.9).
+    private func absorb(_ windows: [CGWindowID], active: CGWindowID, into t: CGWindowID, at index: Int?,
+                        dropFrame: CGRect?, proxy: WindowProxy?) {
+        guard !windows.contains(t), let tEntry = registry.windows[t], windows.allSatisfy({ registry.windows[$0] != nil }),
+              canAbsorb(windows.count, into: t) else { proxy?.dismiss(); return }
         let cover: CGWindowID
         var group: TabGroup
         if let gid = groupOf[t], var existing = groups[gid] {
             cover = existing.activeID
-            existing.add(d)
-            existing.activate(d)
+            existing.insert(windows, at: index)
+            existing.activate(active)
             group = existing
         } else {
             cover = t
-            let outer = ScreenWindows.bounds(of: t) ?? tEntry.window.frame
-            group = TabGroup(members: [t, d], active: d, content: StripLayout.frames(outer: outer, placement: .top).content)
+            let outer = windowBounds( t) ?? tEntry.window.frame
+            group = TabGroup(members: [t], active: t, content: StripLayout.frames(outer: outer, placement: placement).content, placement: placement)
+            group.insert(windows, at: index)
+            group.activate(active)
             groupOf[t] = group.id
         }
-        groupOf[d] = group.id
+        for w in windows { groupOf[w] = group.id }
         groups[group.id] = group
-        FileLog.shared.write("merge window=\(d) into=\(t) group=\(group.id.uuidString.prefix(8)) tabs=\(group.count)")
-
-        let from = dropFrame ?? dEntry.window.frame
         let gid = group.id
-        let proxy = animates && !Motion.reduced ? WindowProxy(image: snapshot, appPID: dEntry.app.pid, appName: dEntry.app.name, on: from) : nil
-        proxy?.show(at: from)
+        FileLog.shared.write("merge windows=\(windows.count) into=\(t) group=\(gid.uuidString.prefix(8)) tabs=\(group.count)")
 
-        // Cover: the window being tabbed into comes to the front, so the dropped window can move
-        // into place behind it, unseen, while its proxy springs there (§5.9).
         activateWindow(cover) {
             self.syncMembers(of: gid, reconcile: true) {
                 guard let g = self.groups[gid] else { return }
                 let strip = self.strip(for: g)
                 strip.place(content: g.content, above: cover)
                 strip.show()
-                FileLog.shared.write("strip shown group=\(gid.uuidString.prefix(8))")
-                guard let proxy else { return self.activateWindow(d) }
+                guard let proxy else { return self.activateWindow(active) }
                 Task { @MainActor in
                     await proxy.spring(to: g.content)
-                    self.activateWindow(d)
-                    if let final = await WindowCapture.capture(d) { proxy.crossfade(to: final) }
+                    self.activateWindow(active)
+                    if let final = await WindowCapture.capture(active) { proxy.crossfade(to: final) }
                     await proxy.fadeOut()
                 }
             }
         }
     }
+
+    private func canAbsorb(_ count: Int, into t: CGWindowID) -> Bool {
+        group(containing: t)?.canAccept(count) ?? (count + 1 <= TabGroup.maxTabs)
+    }
+
+    private func makeProxy(for id: CGWindowID, image: CGImage?, at frame: CGRect?) -> WindowProxy? {
+        guard animates, !Motion.reduced, let entry = registry.windows[id] else { return nil }
+        let from = frame ?? entry.window.frame
+        let proxy = WindowProxy(image: image, appPID: entry.app.pid, appName: entry.app.name, on: from)
+        proxy.show(at: from)
+        return proxy
+    }
+
+    /// Forgets a group whose tabs are all moving elsewhere (no dissolve: nothing grows back).
+    private func dropGroup(_ gid: UUID) {
+        guard let g = groups.removeValue(forKey: gid) else { return }
+        for id in g.members where groupOf[id] == gid { groupOf[id] = nil }
+        resyncTimers.removeValue(forKey: gid)?.invalidate()
+        strips.removeValue(forKey: gid)?.dismiss()
+        tucked.remove(gid)
+    }
+
+    /// Where new groups put their strip (Settings › Tabs › Tab position, PLAN.md §5.6).
+    @ObservationIgnored var placement: TabPlacement = .top
+
+    /// For the drag coordinator: a group's strip under the cursor and where a drop would land.
+    func stripHit(panel: CGWindowID, cursor: CGPoint, excluding: UUID?, incoming: Int) -> DropTargetResolver.StripHit? {
+        guard let (gid, strip) = strips.first(where: { $0.value.windowNumber == panel }), gid != excluding,
+              let g = groups[gid], !g.isMinimized, g.canAccept(incoming), let index = strip.insertIndex(at: cursor) else { return nil }
+        return .init(target: g.activeID, index: index)
+    }
+
+    func showInsertion(target: CGWindowID, index: Int) {
+        guard let gid = groupOf[target] else { return }
+        strips[gid]?.showInsertion(at: index)
+    }
+
+    func hideInsertion(target: CGWindowID) {
+        guard let gid = groupOf[target] else { return }
+        strips[gid]?.showInsertion(at: nil)
+    }
+
+    /// The drag coordinator, for tabs torn out of a strip (targets: another strip, a window's middle).
+    @ObservationIgnored weak var targeting: DragCoordinator?
 
     // MARK: Tabs
 
@@ -123,8 +188,7 @@ final class GroupManager {
         g.isMinimized = true
         groups[gid] = g
         strips[gid]?.hide()
-        let corner = GroupGeometry.parkingOrigin(screen: screenFrame(containing: g.outer))
-        for id in g.inactive { setPosition(id, corner) }
+        for id in g.inactive { park(id, from: g) }
         command(.setMinimized(true), g.activeID)
         FileLog.shared.write("minimize group=\(gid.uuidString.prefix(8))")
     }
@@ -161,6 +225,7 @@ final class GroupManager {
         let proxy = animates ? WindowProxy(image: nil, appPID: entry.app.pid, appName: entry.app.name, on: frame) : nil
         proxy?.show(at: frame, lifted: true)
         tearOff = (id, gid, proxy, g.content.size)
+        targeting?.tabDragBegan(window: id, group: gid)
         Task { @MainActor in
             if let image = await WindowCapture.capture(id), self.tearOff?.window == id { proxy?.setImage(image) }
         }
@@ -169,14 +234,25 @@ final class GroupManager {
     func tearOffMoved(cursor: CGPoint) {
         guard let t = tearOff else { return }
         t.proxy?.move(to: tearOffFrame(cursor: cursor, size: t.size))
+        targeting?.tabDragMoved(to: cursor)
     }
 
-    /// Let go: the window leaves the group where the ghost is, as a normal window at the group's
-    /// size. A group left with one window dissolves.
+    /// Let go. Over another group's strip, the tab moves there at that position; over a window's
+    /// middle after the pause, it tabs with that window; anywhere else it leaves the group where
+    /// the ghost is, as a normal window at the group's size (§5.7). A group left with one window
+    /// dissolves.
     func tearOffEnded(cursor: CGPoint) {
         guard let t = tearOff else { return }
         tearOff = nil
         let frame = tearOffFrame(cursor: cursor, size: t.size)
+        switch targeting?.tabDragEnded() {
+        case .drop(let target)?:
+            return moveTab(t.window, into: target, at: nil, from: frame, proxy: t.proxy)
+        case .dropOnStrip(let target, let index)?:
+            return moveTab(t.window, into: target, at: index, from: frame, proxy: t.proxy)
+        default:
+            break
+        }
         FileLog.shared.write("tear out window=\(t.window)")
         removeMember(t.window, closing: false)
         setFrame(t.window, frame) { landed in
@@ -192,7 +268,79 @@ final class GroupManager {
     func tearOffCancelled() {
         guard let t = tearOff else { return }
         tearOff = nil
+        _ = targeting?.tabDragEnded()
         Task { @MainActor in await t.proxy?.fadeOut() }
+    }
+
+    /// A tab leaves its group for another window or group (dragged there, or picked from "+").
+    private func moveTab(_ id: CGWindowID, into target: CGWindowID, at index: Int?, from frame: CGRect, proxy: WindowProxy?) {
+        guard groupOf[target] != groupOf[id] || groupOf[id] == nil, canAbsorb(1, into: target) else {
+            proxy?.dismiss()
+            return
+        }
+        removeMember(id, closing: false)
+        absorb([id], active: id, into: target, at: index, dropFrame: frame, proxy: proxy)
+    }
+
+    // MARK: Strip menus and buttons (§5.6, §5.7)
+
+    /// Drag a tab sideways: it ends up at `index`.
+    func reorder(_ id: CGWindowID, to index: Int) {
+        guard let gid = groupOf[id], var g = groups[gid] else { return }
+        g.move(id, to: index)
+        groups[gid] = g
+        refreshStrip(gid)
+    }
+
+    func closeOthers(_ id: CGWindowID) {
+        guard let g = group(containing: id) else { return }
+        for other in g.others(than: id) { close(other) }
+    }
+
+    func closeToTheRight(_ id: CGWindowID) {
+        guard let g = group(containing: id) else { return }
+        for other in g.toTheRight(of: id) { close(other) }
+    }
+
+    /// Move Tab to New Window: out of the group in place, cascaded so it's visible (§5.7).
+    func moveToNewWindow(_ id: CGWindowID) {
+        guard let g = group(containing: id) else { return }
+        let frame = g.outer.offsetBy(dx: 22, dy: 22)
+        removeMember(id, closing: false)
+        setFrame(id, frame) { _ in self.activateWindow(id) }
+    }
+
+    /// "+": windows that could join this group (§5.6): eligible, not already in it.
+    func addCandidates(for gid: UUID) -> [AddCandidate] {
+        guard let g = groups[gid], g.canAccept(1) else { return [] }
+        return registry.windows.values
+            .filter { !g.contains($0.id) && Eligibility.canTab($0.window, bundleID: $0.app.bundleID) }
+            .sorted { ($0.app.name, $0.window.title ?? "") < ($1.app.name, $1.window.title ?? "") }
+            .map { AddCandidate(id: $0.id, pid: $0.app.pid, appName: $0.app.name, title: $0.window.title) }
+    }
+
+    func add(_ id: CGWindowID, to gid: UUID) {
+        guard let g = groups[gid], !g.contains(id), let entry = registry.windows[id] else { return }
+        let from = windowBounds( id) ?? entry.window.frame
+        Task { @MainActor in
+            let image = await WindowCapture.capture(id)
+            let proxy = self.makeProxy(for: id, image: image, at: from)
+            if self.groupOf[id] != nil {
+                self.moveTab(id, into: g.activeID, at: nil, from: from, proxy: proxy)
+            } else {
+                self.absorb([id], active: id, into: g.activeID, at: nil, dropFrame: from, proxy: proxy)
+            }
+        }
+    }
+
+    /// Double-click empty strip area: what a title-bar double-click does on this Mac (§5.7),
+    /// per System Settings › Desktop & Dock.
+    func stripDoubleClicked(_ gid: UUID) {
+        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+        case "Minimize": minimize(gid)
+        case "None": break
+        default: toggleFill(gid) // "Fill" / "Maximize" (zoom): the group's Fill
+        }
     }
 
     private func tearOffFrame(cursor: CGPoint, size: CGSize) -> CGRect {
@@ -206,7 +354,10 @@ final class GroupManager {
     /// the window server's bounds live; the others catch up on mouse up (§5.6, P3).
     func memberDragMoved(_ id: CGWindowID, bounds: CGRect) {
         guard let gid = groupOf[id], var g = groups[gid], g.activeID == id else { return }
-        if liveDrag?.group != gid { liveDrag = (gid, g.content) }
+        if liveDrag?.group != gid {
+            liveDrag = (gid, g.content)
+            tuckBackground(gid)
+        }
         g.content = bounds
         groups[gid] = g
         strips[gid]?.follow(content: bounds)
@@ -215,7 +366,7 @@ final class GroupManager {
     func memberDragEnded(_ id: CGWindowID) {
         guard let drag = liveDrag else { return }
         liveDrag = nil
-        if let bounds = ScreenWindows.bounds(of: id), var g = groups[drag.group] {
+        if let bounds = windowBounds( id), var g = groups[drag.group] {
             g.content = bounds
             groups[drag.group] = g
             strips[drag.group]?.place(content: bounds, above: id)
@@ -227,7 +378,10 @@ final class GroupManager {
     /// cursor, the active window follows with one position write at a time, the rest on mouse up.
     func stripDragChanged(_ gid: UUID, cursor: CGPoint) {
         guard let g = groups[gid] else { return }
-        if stripDrag?.group != gid { stripDrag = (gid, g.content, cursor, false, nil) }
+        if stripDrag?.group != gid {
+            stripDrag = (gid, g.content, cursor, false, nil)
+            tuckBackground(gid)
+        }
         guard var d = stripDrag else { return }
         let origin = CGPoint(x: d.startContent.minX + cursor.x - d.startMouse.x, y: d.startContent.minY + cursor.y - d.startMouse.y)
         var moved = g
@@ -346,10 +500,12 @@ final class GroupManager {
         let now = ProcessInfo.processInfo.systemUptime
         if expected.isExpected(w.frame, for: id, now: now) { return }
         if id == g.activeID {
-            // The user moved or resized the active window: the group follows it.
+            // The user moved or resized the active window: the group follows it. While the
+            // mouse is down (resizing from an edge), the background tabs are tucked away.
             g.content = w.frame
             groups[gid] = g
             strips[gid]?.place(content: w.frame, above: id)
+            if NSEvent.pressedMouseButtons & 1 == 1 { tuckBackground(gid) }
         }
         scheduleResync(gid)
     }
@@ -361,8 +517,7 @@ final class GroupManager {
         g.isMinimized = true
         groups[gid] = g
         strips[gid]?.hide()
-        let corner = GroupGeometry.parkingOrigin(screen: screenFrame(containing: g.outer))
-        for other in g.inactive { setPosition(other, corner) }
+        for other in g.inactive { park(other, from: g) }
     }
 
     private func windowRemoved(_ id: CGWindowID) {
@@ -434,7 +589,24 @@ final class GroupManager {
 
     /// Writes the group frame to every member that isn't there yet. With `reconcile`, the group
     /// then adopts the strictest frame the members actually took (Terminal's grid) and re-applies it.
+    /// Moving or resizing the active window would expose the background tabs it was covering,
+    /// so they go to a screen corner (one write each) and come back on mouse up, when the group
+    /// is re-synced: two writes per tab per interaction instead of a stream (P3).
+    private func tuckBackground(_ gid: UUID) {
+        guard !tucked.contains(gid), let g = groups[gid], !g.isMinimized else { return }
+        tucked.insert(gid)
+        for id in g.inactive { park(id, from: g) }
+    }
+
+    private func park(_ id: CGWindowID, from g: TabGroup) {
+        let screen = screenFrame(containing: g.outer)
+        let others = NSScreen.screens.map { ScreenGeometry.cgRect(fromAppKit: $0.frame) }.filter { $0 != screen }
+        let size = registry.windows[id]?.window.frame.size ?? g.content.size
+        setPosition(id, GroupGeometry.parkingOrigin(screen: screen, size: size, otherScreens: others))
+    }
+
     private func syncMembers(of gid: UUID, reconcile: Bool, activeFirst: Bool = false, then: (() -> Void)? = nil) {
+        tucked.remove(gid)
         guard let g = groups[gid] else { then?(); return }
         let requested = g.content
         let members = g.members.filter { id in
@@ -517,7 +689,14 @@ final class GroupManager {
             tearOffEnded: { [weak self] p in self?.tearOffEnded(cursor: p) },
             tearOffCancelled: { [weak self] in self?.tearOffCancelled() },
             stripDragChanged: { [weak self] p in self?.stripDragChanged(gid, cursor: p) },
-            stripDragEnded: { [weak self] in self?.stripDragEnded(gid) }))
+            stripDragEnded: { [weak self] in self?.stripDragEnded(gid) },
+            reorder: { [weak self] id, index in self?.reorder(id, to: index) },
+            closeOthers: { [weak self] id in self?.closeOthers(id) },
+            closeToTheRight: { [weak self] id in self?.closeToTheRight(id) },
+            moveToNewWindow: { [weak self] id in self?.moveToNewWindow(id) },
+            addCandidates: { [weak self] in self?.addCandidates(for: gid) ?? [] },
+            add: { [weak self] id in self?.add(id, to: gid) },
+            doubleClicked: { [weak self] in self?.stripDoubleClicked(gid) }))
         strips[g.id] = strip
         refreshStrip(g.id)
         return strip

@@ -41,9 +41,24 @@ nonisolated enum GroupGeometry {
         return result
     }
 
-    /// Corner parking (PLAN.md §5.5): the window's top-left goes to the screen's bottom-right
-    /// corner with 1 pt left on screen, the way AeroSpace hides windows.
-    static func parkingOrigin(screen: CGRect) -> CGPoint {
-        CGPoint(x: screen.maxX - 1, y: screen.maxY - 1)
+    /// Corner parking (PLAN.md §5.5): the window goes just past a corner of its screen with
+    /// 1 pt left on it, the way AeroSpace hides windows. The corner is one where the window
+    /// doesn't spill onto another display (bottom-right first); if every corner would, the one
+    /// with the least overlap.
+    static func parkingOrigin(screen: CGRect, size: CGSize, otherScreens: [CGRect] = []) -> CGPoint {
+        let candidates = [
+            CGPoint(x: screen.maxX - 1, y: screen.maxY - 1),                              // bottom-right
+            CGPoint(x: screen.minX + 1 - size.width, y: screen.maxY - 1),                 // bottom-left
+            CGPoint(x: screen.maxX - 1, y: screen.minY + 1 - size.height),                // top-right
+            CGPoint(x: screen.minX + 1 - size.width, y: screen.minY + 1 - size.height),   // top-left
+        ]
+        func overlap(_ origin: CGPoint) -> CGFloat {
+            let r = CGRect(origin: origin, size: size)
+            return otherScreens.reduce(0) { total, s in
+                let i = r.intersection(s)
+                return total + (i.isNull ? 0 : i.width * i.height)
+            }
+        }
+        return candidates.min { overlap($0) < overlap($1) } ?? candidates[0]
     }
 }

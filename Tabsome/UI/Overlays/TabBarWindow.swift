@@ -11,6 +11,16 @@ struct TabItem: Identifiable, Equatable {
     let isActive: Bool
 }
 
+/// A window the "+" menu offers (PLAN.md §5.6).
+struct AddCandidate: Identifiable, Equatable {
+    let id: CGWindowID
+    let pid: pid_t
+    let appName: String
+    let title: String?
+
+    var menuTitle: String { (title?.isEmpty == false) ? "\(appName) — \(title!)" : appName }
+}
+
 /// Everything a strip can ask its group to do. Points are global, top-left origin.
 struct StripActions {
     var activate: (CGWindowID) -> Void
@@ -24,6 +34,13 @@ struct StripActions {
     var tearOffCancelled: () -> Void
     var stripDragChanged: (CGPoint) -> Void
     var stripDragEnded: () -> Void
+    var reorder: (CGWindowID, Int) -> Void
+    var closeOthers: (CGWindowID) -> Void
+    var closeToTheRight: (CGWindowID) -> Void
+    var moveToNewWindow: (CGWindowID) -> Void
+    var addCandidates: () -> [AddCandidate]
+    var add: (CGWindowID) -> Void
+    var doubleClicked: () -> Void
 }
 
 @MainActor
@@ -35,6 +52,19 @@ final class TabStripModel {
     /// The pointer, in the strip's coordinates (y down), from an always-on tracking area: the
     /// strip's app is never active, so ordinary hover tracking wouldn't fire.
     var hover: CGPoint?
+    /// Where a window or tab dragged onto this strip would land (§5.2).
+    var insertion: Int?
+    /// Chrome's width freeze (§5.6): after a close, tabs keep their width until the pointer leaves.
+    var frozenWidth: CGFloat?
+    var addCandidates: [AddCandidate] = []
+
+    var activeIndex: Int { tabs.firstIndex(where: \.isActive) ?? 0 }
+    /// The quiet 50-tab limit (§1): a full strip has no "+".
+    var canAdd: Bool { tabs.count < TabGroup.maxTabs }
+
+    func layout(width: CGFloat) -> StripLayout.TopLayout {
+        StripLayout.top(width: width, count: tabs.count, active: activeIndex, showsPlus: canAdd, frozenWidth: frozenWidth)
+    }
 }
 
 /// The tab strip overlay (PLAN.md §5.6): one non-activating panel per group, at normal level,
@@ -47,14 +77,31 @@ final class TabBarWindow {
     private var burstUntil: TimeInterval = 0
     private var aboveID: CGWindowID = 0
     private var dismissing = false
+    var placement: TabPlacement = .top
 
     init(actions: StripActions) {
         panel.setHostedContent(StripHostingView(model: model, actions: actions))
     }
 
+    var windowNumber: CGWindowID { CGWindowID(panel.windowNumber) }
+
     func update(tabs: [TabItem], focused: Bool) {
-        if model.tabs != tabs { model.tabs = tabs }
+        if model.tabs != tabs {
+            withAnimation(Motion.snappy) { model.tabs = tabs }
+        }
         if model.focused != focused { model.focused = focused }
+    }
+
+    /// Where a drop at this global point would insert, if the point is over the tabs.
+    func insertIndex(at cursor: CGPoint) -> Int? {
+        let frame = ScreenGeometry.cgRect(fromAppKit: panel.frame)
+        guard panel.isVisible, frame.contains(cursor) else { return nil }
+        return model.layout(width: frame.width).insertIndex(at: cursor.x - frame.minX, count: model.tabs.count)
+    }
+
+    func showInsertion(at index: Int?) {
+        guard model.insertion != index else { return }
+        withAnimation(Motion.quickFade) { model.insertion = index }
     }
 
     /// Moves the strip to sit on `content`'s strip edge and orders it above that window.
@@ -65,7 +112,7 @@ final class TabBarWindow {
 
     /// Frame only (live following during a drag).
     func follow(content: CGRect) {
-        let strip = StripLayout.frames(outer: StripLayout.outer(content: content, placement: .top), placement: .top).strip
+        let strip = StripLayout.frames(outer: StripLayout.outer(content: content, placement: placement), placement: placement).strip
         panel.setFrame(ScreenGeometry.appKitRect(fromCG: strip), display: true)
     }
 
@@ -83,7 +130,7 @@ final class TabBarWindow {
                 guard let self else { return }
                 let list = ScreenWindows.onScreen().filter { $0.layer == 0 }
                 if let target = list.firstIndex(where: { $0.id == self.aboveID }),
-                   list.firstIndex(where: { $0.id == CGWindowID(self.panel.windowNumber) }) != target - 1 {
+                   list.firstIndex(where: { $0.id == self.windowNumber }) != target - 1 {
                     self.panel.order(.above, relativeTo: Int(self.aboveID))
                 }
                 if ProcessInfo.processInfo.systemUptime > self.burstUntil {
@@ -132,8 +179,6 @@ private final class StripHostingView: NSHostingView<TabStripView> {
         self.model = model
         self.actions = actions
         super.init(rootView: TabStripView(model: model, actions: actions))
-        // The strip's frame comes from the group, never from SwiftUI's ideal size (which is zero
-        // for a view that fills whatever it's given).
         sizingOptions = []
     }
 
@@ -154,13 +199,24 @@ private final class StripHostingView: NSHostingView<TabStripView> {
     }
 
     override func mouseMoved(with event: NSEvent) { model.hover = flipped(event) }
-    override func mouseEntered(with event: NSEvent) { model.hover = flipped(event) }
-    override func mouseExited(with event: NSEvent) { model.hover = nil }
+
+    override func mouseEntered(with event: NSEvent) {
+        model.hover = flipped(event)
+        model.addCandidates = actions.addCandidates()
+    }
+
+    /// Leaving the strip ends the width freeze: tabs reflow (§5.6).
+    override func mouseExited(with event: NSEvent) {
+        model.hover = nil
+        if model.frozenWidth != nil { withAnimation(Motion.smooth) { model.frozenWidth = nil } }
+    }
 
     override func otherMouseUp(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return super.otherMouseUp(with: event) }
         let p = flipped(event)
-        let frames = StripLayout.tabFrames(stripWidth: bounds.width, count: model.tabs.count)
-        if let i = frames.firstIndex(where: { $0.minX <= p.x && p.x < $0.maxX }) { actions.close(model.tabs[i].id) }
+        let layout = model.layout(width: bounds.width)
+        guard let i = layout.tab(at: p.x) else { return }
+        if model.frozenWidth == nil { model.frozenWidth = layout.frames.first?.width }
+        actions.close(model.tabs[i].id)
     }
 }

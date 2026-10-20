@@ -1,9 +1,12 @@
 import AppKit
 import CoreGraphics
 
-/// Phase 2's drag loop (PLAN.md §5.1–5.3): mouse down on an eligible window → its title-bar drag
-/// is detected → the target under the cursor is resolved (≤ 30 Hz) → the dwell arms → the
-/// highlight shows. Mouse up while armed is where Phase 3 merges.
+/// The drag loop (PLAN.md §5.1–5.3), shared by three kinds of drag:
+/// - a window's title bar: tab it into the target (at the end, or at a strip position);
+/// - a group's active window: the strip follows live, and the whole group can merge into another;
+/// - a tab torn out of a strip (driven by `GroupManager`): move it to another group or window.
+/// The target under the cursor is resolved at most 30 times a second; over a window's middle the
+/// dwell arms the highlight, over a strip the insertion marker shows at once.
 @MainActor
 final class DragCoordinator {
     private let registry: WindowRegistry
@@ -13,15 +16,20 @@ final class DragCoordinator {
     private var dwell = DwellStateMachine()
     private let ownPID = ProcessInfo.processInfo.processIdentifier
 
-    /// One press of the mouse button on a window that could be tabbed.
+    fileprivate enum Source: Equatable {
+        case window
+        /// A group's active window: dragging it moves the group.
+        case groupWindow(UUID)
+        /// A tab being torn out of its strip.
+        case tab(UUID)
+    }
+
     private struct Press {
         let window: CGWindowID
-        let pid: pid_t
+        let source: Source
         let downFrame: CGRect
-        /// The window is a group's active tab: dragging its title bar moves the whole group.
-        let movesGroup: Bool
         var dragging = false
-        var lastTarget: DropTargetResolver.Target?
+        var lastTarget: DropTargetResolver.Resolved?
     }
 
     private var press: Press?
@@ -29,7 +37,7 @@ final class DragCoordinator {
     private var lastCursor = CGPoint.zero
     private var trailingResolve: Timer?
     private var tickTimer: Timer?
-    /// The dragged window, captured while armed (§5.9: capture takes 50–140 ms, so it starts
+    /// The dragged window, captured once armed (§5.9: capture takes 50–140 ms, so it starts
     /// before mouse up). Memory only; dropped with the press (S3).
     private var snapshot: (window: CGWindowID, image: CGImage?)?
     private var snapshotTask: Task<Void, Never>?
@@ -48,13 +56,34 @@ final class DragCoordinator {
         endPress(cancel: true)
     }
 
-    // MARK: Events
+    // MARK: Tab drags (from GroupManager)
+
+    func tabDragBegan(window: CGWindowID, group: UUID) {
+        endPress(cancel: true)
+        press = Press(window: window, source: .tab(group), downFrame: .zero, dragging: true)
+    }
+
+    func tabDragMoved(to point: CGPoint) {
+        guard press?.source.isTab == true else { return }
+        dragged(to: point)
+    }
+
+    /// Where the tab was dropped: another group's strip, a window's middle (armed), or nowhere.
+    func tabDragEnded() -> DwellStateMachine.Effect? {
+        guard let p = press, p.source.isTab else { return nil }
+        let effects = dwell.mouseUp()
+        perform(effects, dropping: false) // hide the highlight / marker; the caller does the drop
+        endPress(cancel: false)
+        return effects.first { if case .drop = $0 { true } else if case .dropOnStrip = $0 { true } else { false } }
+    }
+
+    // MARK: Mouse events
 
     private func handle(_ event: DragMonitor.Event) {
         switch event {
         case .down(let p): pressed(at: p)
-        case .dragged(let p): dragged(to: p)
-        case .up: released()
+        case .dragged(let p): if press?.source.isTab != true { dragged(to: p) }
+        case .up: if press?.source.isTab != true { released() }
         }
     }
 
@@ -62,21 +91,23 @@ final class DragCoordinator {
         endPress(cancel: true)
         guard !Eligibility.secureInputActive,
               let hit = ScreenWindows.onScreen().first(where: { $0.layer == 0 && $0.pid != ownPID && $0.bounds.contains(point) }),
-              eligible(hit.id) else { return }
-        let grouped = groups.group(containing: hit.id) != nil
-        // Inactive tabs are hidden behind the active one; nothing to drag there.
-        if grouped, !groups.isActiveMember(hit.id) { return }
-        press = Press(window: hit.id, pid: hit.pid, downFrame: hit.bounds, movesGroup: grouped)
+              let entry = registry.windows[hit.id], Eligibility.canTab(entry.window, bundleID: entry.app.bundleID) else { return }
+        if let g = groups.group(containing: hit.id) {
+            // Inactive tabs are hidden behind the active one; nothing to drag there.
+            guard g.activeID == hit.id else { return }
+            press = Press(window: hit.id, source: .groupWindow(g.id), downFrame: hit.bounds)
+        } else {
+            press = Press(window: hit.id, source: .window, downFrame: hit.bounds)
+        }
     }
 
     private func dragged(to point: CGPoint) {
         guard var p = press else { return }
         lastCursor = point
         // A group's title-bar drag: the strip follows the window server's bounds on every drag
-        // event (once per display frame at most), never the sparse AX notifications (§5.6).
-        if p.dragging, p.movesGroup {
-            if let bounds = ScreenWindows.bounds(of: p.window) { groups.memberDragMoved(p.window, bounds: bounds) }
-            return
+        // event, never the sparse AX notifications (§5.6). Targeting below is throttled.
+        if p.dragging, case .groupWindow = p.source, let bounds = ScreenWindows.bounds(of: p.window) {
+            groups.memberDragMoved(p.window, bounds: bounds)
         }
         let now = ProcessInfo.processInfo.systemUptime
         // Throttle window-server reads to 30 Hz, with a trailing read so the last position counts.
@@ -96,12 +127,8 @@ final class DragCoordinator {
                 return
             case .drag:
                 p.dragging = true
-                press = p
-                FileLog.shared.write("drag start window=\(p.window)\(p.movesGroup ? " (group)" : "")")
-                if p.movesGroup {
-                    groups.memberDragMoved(p.window, bounds: current)
-                    return
-                }
+                FileLog.shared.write("drag start window=\(p.window)\(p.source == .window ? "" : " (group)")")
+                if case .groupWindow = p.source { groups.memberDragMoved(p.window, bounds: current) }
             }
         }
         if Eligibility.secureInputActive {
@@ -109,11 +136,12 @@ final class DragCoordinator {
             press = nil
             return
         }
-        let target = DropTargetResolver.resolve(cursor: point, windows: ScreenWindows.onScreen(), dragged: p.window,
-                                                ownPID: ownPID, isEligible: eligible)
-        p.lastTarget = target
+        let resolved = DropTargetResolver.resolve(cursor: point, windows: ScreenWindows.onScreen(), dragged: p.window, ownPID: ownPID,
+                                                  strip: { [groups] w in groups.stripHit(panel: w.id, cursor: point, excluding: p.source.group, incoming: incoming(p)) },
+                                                  isEligible: { id in self.eligibleTarget(id, for: p) })
+        p.lastTarget = resolved
         press = p
-        perform(dwell.update(cursor: point, time: now, target: target?.inMiddle == true ? target?.id : nil))
+        perform(dwell.update(cursor: point, time: now, target: resolved?.dwellTarget))
     }
 
     private func released() {
@@ -121,12 +149,10 @@ final class DragCoordinator {
             press = nil
             return
         }
-        if p.movesGroup {
-            groups.memberDragEnded(p.window)
-            FileLog.shared.write("drag end window=\(p.window) (group)")
-            return endPress(cancel: false)
-        }
-        perform(dwell.mouseUp())
+        let effects = dwell.mouseUp()
+        let dropped = effects.contains { if case .drop = $0 { true } else if case .dropOnStrip = $0 { true } else { false } }
+        perform(effects)
+        if case .groupWindow = p.source, !dropped { groups.memberDragEnded(p.window) }
         FileLog.shared.write("drag end window=\(p.window)")
         endPress(cancel: false)
     }
@@ -154,7 +180,7 @@ final class DragCoordinator {
 
     // MARK: Effects
 
-    private func perform(_ effects: [DwellStateMachine.Effect]) {
+    private func perform(_ effects: [DwellStateMachine.Effect], dropping: Bool = true) {
         for effect in effects {
             switch effect {
             case .scheduleTick(let at):
@@ -169,41 +195,79 @@ final class DragCoordinator {
                 showHighlight(on: target)
             case .hideHighlight:
                 highlight.hide()
-                FileLog.shared.write("disarmed")
+            case .showInsertion(let target, let index):
+                groups.showInsertion(target: target, index: index)
+                captureDragged()
+            case .hideInsertion(let target):
+                groups.hideInsertion(target: target)
             case .drop(let target):
-                guard let dragged = press?.window else { break }
-                FileLog.shared.write("drop window=\(dragged) target=\(target)")
-                let image = snapshot?.window == dragged ? snapshot?.image : nil
-                groups.merge(dragged: dragged, into: target, dropFrame: ScreenWindows.bounds(of: dragged), snapshot: image)
+                guard dropping, let p = press, !p.source.isTab else { break }
+                FileLog.shared.write("drop window=\(p.window) target=\(target)")
+                drop(p, into: target, at: nil)
+            case .dropOnStrip(let target, let index):
+                guard dropping, let p = press, !p.source.isTab else { break }
+                FileLog.shared.write("drop window=\(p.window) on strip target=\(target) index=\(index)")
+                drop(p, into: target, at: index)
             }
+        }
+    }
+
+    private func drop(_ p: Press, into target: CGWindowID, at index: Int?) {
+        let image = snapshot?.window == p.window ? snapshot?.image : nil
+        let frame = ScreenWindows.bounds(of: p.window)
+        if case .groupWindow(let gid) = p.source {
+            groups.mergeGroup(gid, into: target, at: index, dropFrame: frame, snapshot: image)
+        } else {
+            groups.merge(dragged: p.window, into: target, at: index, dropFrame: frame, snapshot: image)
         }
     }
 
     private func showHighlight(on target: CGWindowID) {
-        guard let p = press, let frame = p.lastTarget?.frame,
-              let targetEntry = registry.windows[target], let draggedEntry = registry.windows[p.window] else { return }
-        // A grouped target previews its existing tabs, then the new one.
+        guard let p = press, case .window(let t) = p.lastTarget, t.id == target,
+              let targetEntry = registry.windows[target] else { return }
+        // A grouped target previews its existing tabs, then the new ones at the end.
         let existing = groups.group(containing: target).map { $0.members.compactMap { registry.windows[$0] } } ?? [targetEntry]
-        let tabs = TabLabel.ghostTabs(existing: existing, adding: draggedEntry)
-        highlight.show(targetFrame: frame, above: target, tabs: tabs)
+        let adding = (p.source.group.flatMap { gid in groups.groups[gid]?.members } ?? [p.window]).compactMap { registry.windows[$0] }
+        highlight.show(targetFrame: t.frame, above: target, tabs: TabLabel.ghostTabs(existing: existing, adding: adding))
         FileLog.shared.write("armed target=\(target) window=\(p.window)")
+        captureDragged()
+    }
+
+    /// Starts the dragged window's snapshot as soon as a drop is likely.
+    private func captureDragged() {
+        guard let p = press, !p.source.isTab, snapshot?.window != p.window else { return }
         let dragged = p.window
-        if snapshot?.window != dragged {
-            snapshot = (dragged, nil)
-            snapshotTask = Task { @MainActor [weak self] in
-                let image = await WindowCapture.capture(dragged)
-                guard !Task.isCancelled, self?.snapshot?.window == dragged else { return }
-                self?.snapshot = (dragged, image)
-            }
+        snapshot = (dragged, nil)
+        snapshotTask = Task { @MainActor [weak self] in
+            let image = await WindowCapture.capture(dragged)
+            guard !Task.isCancelled, self?.snapshot?.window == dragged else { return }
+            self?.snapshot = (dragged, image)
         }
     }
 
-    // MARK: Eligibility (S6)
+    // MARK: Eligibility (S6, §1)
 
-    private func eligible(_ id: CGWindowID) -> Bool {
-        guard let entry = registry.windows[id] else { return false }
-        // A group's hidden tabs never count; its active tab stands for the group.
-        if groups.group(containing: id) != nil, !groups.isActiveMember(id) { return false }
-        return Eligibility.canTab(entry.window, bundleID: entry.app.bundleID)
+    /// How many tabs this drag would add to a target group.
+    private func incoming(_ p: Press) -> Int {
+        if case .groupWindow(let gid) = p.source { return groups.groups[gid]?.count ?? 1 }
+        return 1
+    }
+
+    private func eligibleTarget(_ id: CGWindowID, for p: Press) -> Bool {
+        guard let entry = registry.windows[id], Eligibility.canTab(entry.window, bundleID: entry.app.bundleID) else { return false }
+        guard let g = groups.group(containing: id) else { return true }
+        // A group's hidden tabs never count; its active tab stands for the group. Never the
+        // dragged tab's own group, and never a full one (the quiet 50-tab limit).
+        return g.activeID == id && g.id != p.source.group && g.canAccept(incoming(p))
+    }
+}
+
+private extension DragCoordinator.Source {
+    var isTab: Bool { if case .tab = self { true } else { false } }
+    var group: UUID? {
+        switch self {
+        case .window: nil
+        case .groupWindow(let g), .tab(let g): g
+        }
     }
 }

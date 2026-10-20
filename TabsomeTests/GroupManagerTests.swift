@@ -16,6 +16,7 @@ struct GroupManagerTests {
         registry = WindowRegistry(system: system)
         manager = GroupManager(registry: registry, system: system)
         manager.animates = false
+        manager.windowBounds = { _ in nil }
         registry.track(.init(pid: 101, name: "Safari", bundleID: "com.apple.Safari"))
         registry.track(.init(pid: 202, name: "Finder", bundleID: "com.apple.finder"))
         registry.track(.init(pid: 303, name: "Notes", bundleID: "com.apple.Notes"))
@@ -138,5 +139,114 @@ struct GroupManagerTests {
         let before = manager.groups
         manager.merge(dragged: 2, into: 3, dropFrame: nil, snapshot: nil)
         #expect(manager.groups == before)
+    }
+}
+
+@MainActor
+struct GroupManagerPhase4Tests {
+    let system = FakeWindowSystem()
+    let registry: WindowRegistry
+    let manager: GroupManager
+    let content = CGRect(x: 100, y: 132, width: 800, height: 568)
+
+    init() {
+        registry = WindowRegistry(system: system)
+        manager = GroupManager(registry: registry, system: system)
+        manager.animates = false
+        manager.windowBounds = { _ in nil }
+        for (pid, name) in [(101, "Safari"), (202, "Finder"), (303, "Notes"), (404, "Mail"), (505, "Xcode")] as [(pid_t, String)] {
+            registry.track(.init(pid: pid, name: name, bundleID: "test.\(name)"))
+            system.send(.appWindows(pid, [snapshot(CGWindowID(pid / 101), pid: pid, frame: CGRect(x: 100, y: 100, width: 800, height: 600))]))
+        }
+    }
+
+    @Test func dropOnAStripInsertsAtThatPosition() throws {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)          // [1, 2]
+        manager.merge(dragged: 3, into: 2, at: 1, dropFrame: nil, snapshot: nil)   // onto the strip, between them
+        #expect(try #require(manager.group(containing: 1)).members == [1, 3, 2])
+        #expect(manager.group(containing: 1)?.activeID == 3)
+    }
+
+    @Test func aWholeGroupMergesIntoAnother() throws {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)   // A = [1, 2], active 2
+        manager.merge(dragged: 4, into: 3, dropFrame: nil, snapshot: nil)   // B = [3, 4], active 4
+        let b = try #require(manager.group(containing: 3)).id
+        manager.mergeGroup(b, into: 2, dropFrame: nil, snapshot: nil)
+        #expect(manager.groups.count == 1)
+        let g = try #require(manager.group(containing: 1))
+        #expect(g.members == [1, 2, 3, 4])
+        #expect(g.activeID == 4)
+    }
+
+    @Test func reorderAndCloseToTheRight() throws {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        manager.merge(dragged: 3, into: 2, dropFrame: nil, snapshot: nil)   // [1, 2, 3]
+        manager.reorder(3, to: 0)
+        #expect(try #require(manager.group(containing: 1)).members == [3, 1, 2])
+        system.clearCommands()
+        manager.closeToTheRight(1)
+        #expect(system.commands.map(\.1) == [2])
+        #expect(system.commands.map(\.0) == [.close])
+        system.clearCommands()
+        manager.closeOthers(1)
+        #expect(Set(system.commands.map(\.1)) == [3, 2])
+    }
+
+    @Test func moveTabToNewWindowCascadesItOut() throws {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        manager.merge(dragged: 3, into: 2, dropFrame: nil, snapshot: nil)
+        let outer = try #require(manager.group(containing: 1)).outer
+        system.clearCommands()
+        manager.moveToNewWindow(3)
+        #expect(manager.group(containing: 3) == nil)
+        #expect(try #require(manager.group(containing: 1)).members == [1, 2])
+        let frame = system.commands.compactMap { c, w -> CGRect? in if w == 3, case .setFrame(let f) = c { f } else { nil } }.last
+        #expect(frame == outer.offsetBy(dx: 22, dy: 22))
+    }
+
+    @Test func plusOffersWindowsNotInTheGroup() throws {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        let gid = try #require(manager.group(containing: 1)).id
+        #expect(Set(manager.addCandidates(for: gid).map(\.id)) == [3, 4, 5])
+    }
+}
+
+@MainActor
+struct TuckTests {
+    let system = FakeWindowSystem()
+    let registry: WindowRegistry
+    let manager: GroupManager
+
+    init() {
+        registry = WindowRegistry(system: system)
+        manager = GroupManager(registry: registry, system: system)
+        manager.animates = false
+        manager.windowBounds = { _ in nil }
+        registry.track(.init(pid: 101, name: "Safari", bundleID: "a"))
+        registry.track(.init(pid: 202, name: "Finder", bundleID: "b"))
+        system.send(.appWindows(101, [snapshot(1, pid: 101, frame: CGRect(x: 100, y: 100, width: 800, height: 600))]))
+        system.send(.appWindows(202, [snapshot(2, pid: 202, frame: CGRect(x: 900, y: 100, width: 500, height: 400))]))
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil) // active 2, background 1
+        system.clearCommands()
+    }
+
+    @Test func movingTheGroupTucksTheBackgroundTabThenBringsItBack() throws {
+        let content = try #require(manager.group(containing: 1)).content
+        let moved = content.offsetBy(dx: 200, dy: 50)
+        manager.memberDragMoved(2, bounds: content.offsetBy(dx: 10, dy: 0))
+        manager.memberDragMoved(2, bounds: moved)
+        let positions = system.commands.filter { if case .setPosition = $0.0 { $0.1 == 1 } else { false } }
+        #expect(positions.count == 1) // one write when the drag starts, none during it
+        system.clearCommands()
+        manager.memberDragEnded(2) // (ScreenWindows has no bounds for a fake window: the last live frame is kept)
+        let back = system.commands.compactMap { c, w -> CGRect? in if w == 1, case .setFrame(let f) = c { f } else { nil } }
+        #expect(back == [moved])
+    }
+
+    @Test func draggingTheStripTucksToo() throws {
+        let gid = try #require(manager.group(containing: 1)).id
+        manager.stripDragChanged(gid, cursor: CGPoint(x: 500, y: 110))
+        manager.stripDragChanged(gid, cursor: CGPoint(x: 600, y: 150))
+        #expect(system.commands.contains { if case .setPosition = $0.0 { $0.1 == 1 } else { false } })
     }
 }

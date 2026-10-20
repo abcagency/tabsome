@@ -3,6 +3,9 @@ import Foundation
 
 /// One tabbed window (PLAN.md terminology: a "group"). Pure value type with the browser rules.
 nonisolated struct TabGroup: Equatable, Identifiable {
+    /// A quiet safety limit (PLAN.md §1): a full group stops accepting tabs, with no alert.
+    static let maxTabs = 50
+
     let id: UUID
     private(set) var members: [CGWindowID]
     private(set) var activeID: CGWindowID
@@ -28,12 +31,40 @@ nonisolated struct TabGroup: Equatable, Identifiable {
     var inactive: [CGWindowID] { members.filter { $0 != activeID } }
 
     func contains(_ id: CGWindowID) -> Bool { members.contains(id) }
+    func index(of id: CGWindowID) -> Int? { members.firstIndex(of: id) }
 
-    /// New tabs go at the end of the strip by default (PLAN.md §5.3).
-    mutating func add(_ id: CGWindowID, at index: Int? = nil) {
-        guard !members.contains(id) else { return }
+    /// Room for `incoming` more tabs under the limit.
+    func canAccept(_ incoming: Int) -> Bool { members.count + incoming <= Self.maxTabs }
+
+    /// New tabs go at the end of the strip by default (PLAN.md §5.3), or at a strip position
+    /// (§5.2). Refused quietly past the limit.
+    @discardableResult
+    mutating func add(_ id: CGWindowID, at index: Int? = nil) -> Bool {
+        insert([id], at: index)
+    }
+
+    /// Several tabs at once (a whole group merging in), keeping their order.
+    @discardableResult
+    mutating func insert(_ ids: [CGWindowID], at index: Int? = nil) -> Bool {
+        let new = ids.filter { !members.contains($0) }
+        guard canAccept(new.count) else { return false }
         let i = min(max(index ?? members.count, 0), members.count)
-        members.insert(id, at: i)
+        members.insert(contentsOf: new, at: i)
+        return true
+    }
+
+    /// Reorder (§5.7): the tab ends up at `index` in the new order.
+    mutating func move(_ id: CGWindowID, to index: Int) {
+        guard let from = members.firstIndex(of: id) else { return }
+        members.remove(at: from)
+        members.insert(id, at: min(max(index, 0), members.count))
+    }
+
+    /// For "Close Other Tabs" / "Close Tabs to the Right" (§5.7). In Left mode "right" means below.
+    func others(than id: CGWindowID) -> [CGWindowID] { members.filter { $0 != id } }
+    func toTheRight(of id: CGWindowID) -> [CGWindowID] {
+        guard let i = members.firstIndex(of: id) else { return [] }
+        return Array(members[(i + 1)...])
     }
 
     mutating func activate(_ id: CGWindowID) {

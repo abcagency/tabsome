@@ -10,20 +10,20 @@ struct TabLabelTests {
 
     @Test func differentAppsShowTheAppName() {
         let tabs = TabLabel.ghostTabs(existing: [entry(1, app: "Safari", pid: 10, title: "Apple")],
-                                      adding: entry(2, app: "Finder", pid: 20, title: "Downloads"))
+                                      adding: [entry(2, app: "Finder", pid: 20, title: "Downloads")])
         #expect(tabs.map(\.label) == ["Safari", "Finder"])
         #expect(tabs.map(\.isNew) == [false, true])
     }
 
     @Test func sameAppTabsAddTheTitle() {
         let tabs = TabLabel.ghostTabs(existing: [entry(1, app: "Safari", pid: 10, title: "Apple")],
-                                      adding: entry(2, app: "Safari", pid: 10, title: "Swift"))
+                                      adding: [entry(2, app: "Safari", pid: 10, title: "Swift")])
         #expect(tabs.map(\.label) == ["Safari — Apple", "Safari — Swift"])
     }
 
     @Test func sameAppWithoutATitleFallsBackToTheName() {
         let tabs = TabLabel.ghostTabs(existing: [entry(1, app: "Notes", pid: 10, title: nil)],
-                                      adding: entry(2, app: "Notes", pid: 10, title: ""))
+                                      adding: [entry(2, app: "Notes", pid: 10, title: "")])
         #expect(tabs.map(\.label) == ["Notes", "Notes"])
     }
 }
