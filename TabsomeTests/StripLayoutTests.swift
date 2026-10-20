@@ -72,8 +72,8 @@ struct StripTopLayoutTests {
         #expect(l.insertIndex(at: l.frames[0].minX + 1, count: 3) == 0)
         #expect(l.insertIndex(at: l.frames[0].maxX - 1, count: 3) == 1)
         #expect(l.insertIndex(at: l.frames[2].maxX - 1, count: 3) == 3)
-        #expect(l.markerX(for: 1) == l.frames[1].minX)
-        #expect(l.markerX(for: 3) == l.frames[2].maxX)
+        #expect(l.markerPosition(for: 1) == l.frames[1].minX)
+        #expect(l.markerPosition(for: 3) == l.frames[2].maxX)
         #expect(l.tab(at: l.frames[1].midX) == 1)
     }
 

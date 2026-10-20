@@ -22,6 +22,17 @@ final class WindowRegistry {
     private(set) var apps: [pid_t: AppInfo] = [:]
     private(set) var mainWindow: [pid_t: CGWindowID] = [:]
     private(set) var unresponsive: Set<pid_t> = []
+    /// Tab names the user chose (PLAN.md §5.10). They belong to the window, not its group, so a
+    /// name follows the window when it's torn out and regrouped; it goes when the window closes.
+    /// Kept only while Tabsome runs (§10.3). Sensitive like titles (S4): never logged.
+    private(set) var customNames: [CGWindowID: String] = [:]
+
+    /// Trims, caps at 60 characters, and treats an empty name as "use the default" (§5.10).
+    func setCustomName(_ name: String?, for id: CGWindowID) {
+        let trimmed = String((name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxNameLength))
+        customNames[id] = trimmed.isEmpty ? nil : trimmed
+    }
+    static let maxNameLength = 60
     private(set) var isRunning = false
 
     /// Called when AX reports the API disabled (permission revoked mid-session).
@@ -95,7 +106,7 @@ final class WindowRegistry {
         system.untrack(pid: pid)
         let gone = windows.values.filter { $0.app.pid == pid }.map(\.id)
         windows = windows.filter { $0.value.app.pid != pid }
-        for id in gone { onWindowRemoved?(id, pid) }
+        for id in gone { customNames[id] = nil; onWindowRemoved?(id, pid) }
         mainWindow[pid] = nil
         unresponsive.remove(pid)
     }
@@ -116,7 +127,7 @@ final class WindowRegistry {
                 if old != new { onWindowUpdated?(old, new) }
             }
             if let main = snapshots.first(where: \.isMain) { mainWindow[pid] = main.id }
-            for id in gone { onWindowRemoved?(id, pid) }
+            for id in gone { customNames[id] = nil; onWindowRemoved?(id, pid) }
         case .windowUpdated(let s):
             guard let app = apps[s.pid] else { return }
             let old = windows[s.id]
@@ -125,6 +136,7 @@ final class WindowRegistry {
             if old != new { onWindowUpdated?(old, new) }
         case .windowDestroyed(let pid, let id):
             guard windows.removeValue(forKey: id) != nil else { return }
+            customNames[id] = nil
             if mainWindow[pid] == id { mainWindow[pid] = nil }
             onWindowRemoved?(id, pid)
         case .mainWindowChanged(let pid, let id):

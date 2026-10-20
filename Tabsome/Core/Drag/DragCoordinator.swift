@@ -20,8 +20,8 @@ final class DragCoordinator {
         case window
         /// A group's active window: dragging it moves the group.
         case groupWindow(UUID)
-        /// A tab being torn out of its strip.
-        case tab(UUID)
+        /// Tabs being torn out of their strip (one, or a selection of `count`).
+        case tab(UUID, count: Int)
     }
 
     private struct Press {
@@ -58,9 +58,9 @@ final class DragCoordinator {
 
     // MARK: Tab drags (from GroupManager)
 
-    func tabDragBegan(window: CGWindowID, group: UUID) {
+    func tabDragBegan(window: CGWindowID, group: UUID, count: Int = 1) {
         endPress(cancel: true)
-        press = Press(window: window, source: .tab(group), downFrame: .zero, dragging: true)
+        press = Press(window: window, source: .tab(group, count: count), downFrame: .zero, dragging: true)
     }
 
     func tabDragMoved(to point: CGPoint) {
@@ -228,7 +228,8 @@ final class DragCoordinator {
         // A grouped target previews its existing tabs, then the new ones at the end.
         let existing = groups.group(containing: target).map { $0.members.compactMap { registry.windows[$0] } } ?? [targetEntry]
         let adding = (p.source.group.flatMap { gid in groups.groups[gid]?.members } ?? [p.window]).compactMap { registry.windows[$0] }
-        highlight.show(targetFrame: t.frame, above: target, tabs: TabLabel.ghostTabs(existing: existing, adding: adding))
+        highlight.show(targetFrame: t.frame, above: target, tabs: TabLabel.ghostTabs(existing: existing, adding: adding, names: registry.customNames),
+                       placement: groups.placement)
         FileLog.shared.write("armed target=\(target) window=\(p.window)")
         captureDragged()
     }
@@ -249,8 +250,11 @@ final class DragCoordinator {
 
     /// How many tabs this drag would add to a target group.
     private func incoming(_ p: Press) -> Int {
-        if case .groupWindow(let gid) = p.source { return groups.groups[gid]?.count ?? 1 }
-        return 1
+        switch p.source {
+        case .groupWindow(let gid): return groups.groups[gid]?.count ?? 1
+        case .tab(_, let count): return count
+        case .window: return 1
+        }
     }
 
     private func eligibleTarget(_ id: CGWindowID, for p: Press) -> Bool {
@@ -267,7 +271,7 @@ private extension DragCoordinator.Source {
     var group: UUID? {
         switch self {
         case .window: nil
-        case .groupWindow(let g), .tab(let g): g
+        case .groupWindow(let g), .tab(let g, _): g
         }
     }
 }

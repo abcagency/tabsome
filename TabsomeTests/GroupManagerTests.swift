@@ -96,6 +96,7 @@ struct GroupManagerTests {
     }
 
     @Test func movingTheActiveWindowMovesTheGroup() throws {
+        manager.settleDuration = 0 // the move comes after the merge has settled
         manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
         system.send(.windowUpdated(snapshot(2, pid: 202, frame: content)))
         let moved = content.offsetBy(dx: 300, dy: 40)
@@ -248,5 +249,88 @@ struct TuckTests {
         manager.stripDragChanged(gid, cursor: CGPoint(x: 500, y: 110))
         manager.stripDragChanged(gid, cursor: CGPoint(x: 600, y: 150))
         #expect(system.commands.contains { if case .setPosition = $0.0 { $0.1 == 1 } else { false } })
+    }
+}
+
+@MainActor
+struct GroupManagerPhase4bTests {
+    let system = FakeWindowSystem()
+    let registry: WindowRegistry
+    let manager: GroupManager
+    let frame = CGRect(x: 100, y: 100, width: 800, height: 600)
+
+    init() {
+        registry = WindowRegistry(system: system)
+        manager = GroupManager(registry: registry, system: system)
+        manager.animates = false
+        manager.windowBounds = { _ in nil }
+        for (pid, name) in [(101, "Safari"), (202, "Finder"), (303, "Notes"), (404, "Mail"), (505, "Xcode")] as [(pid_t, String)] {
+            registry.track(.init(pid: pid, name: name, bundleID: "test.\(name)"))
+            system.send(.appWindows(pid, [snapshot(CGWindowID(pid / 101), pid: pid, title: "Doc \(pid)", frame: frame)]))
+        }
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        manager.merge(dragged: 3, into: 2, dropFrame: nil, snapshot: nil)
+        manager.merge(dragged: 4, into: 3, dropFrame: nil, snapshot: nil) // [1, 2, 3, 4], active 4
+    }
+
+    @Test func renamingFollowsTheRulesAndTheWindow() {
+        manager.rename(2, to: "   Research   ")
+        #expect(registry.customNames[2] == "Research")
+        manager.rename(2, to: String(repeating: "x", count: 80))
+        #expect(registry.customNames[2]?.count == 60)
+        manager.rename(2, to: "")
+        #expect(registry.customNames[2] == nil)
+        manager.rename(3, to: "Notes for later")
+        manager.moveToNewWindow(3)                       // the name follows the window
+        #expect(registry.customNames[3] == "Notes for later")
+        system.send(.windowDestroyed(303, 3))            // and goes when it closes
+        #expect(registry.customNames[3] == nil)
+    }
+
+    @Test func aCustomNameWinsOverTheDefaultLabel() throws {
+        let e = try #require(registry.windows[2])
+        #expect(TabLabel.label(for: e, among: [e], customName: "Mine") == "Mine")
+        #expect(TabLabel.label(for: e, among: [e]) == "Finder")
+    }
+
+    @Test func switchingToLeftMovesTheStripSpaceToTheLeftSide() throws {
+        let outer = try #require(manager.group(containing: 1)).outer
+        system.clearCommands()
+        manager.setPlacement(.left)
+        let g = try #require(manager.group(containing: 1))
+        #expect(g.placement == .left)
+        #expect(g.outer == outer)
+        #expect(g.content == CGRect(x: outer.minX + 40, y: outer.minY, width: outer.width - 40, height: outer.height))
+        #expect(system.commands.contains { if case .setFrame(let f) = $0.0 { f == g.content } else { false } })
+    }
+
+    @Test func severalSelectedTabsTornOutBecomeTheirOwnGroup() throws {
+        manager.tearOffBegan([2, 3], grabbed: 3, cursor: CGPoint(x: 1200, y: 400))
+        manager.tearOffEnded(cursor: CGPoint(x: 1200, y: 400))
+        let original = try #require(manager.group(containing: 1))
+        #expect(original.members == [1, 4])
+        let new = try #require(manager.group(containing: 2))
+        #expect(new.members == [2, 3])
+        #expect(new.activeID == 3)
+        #expect(new.id != original.id)
+    }
+
+    @Test func movingSelectedTabsToNewWindowMakesAGroup() throws {
+        manager.moveToNewWindow([1, 2], active: 2)
+        #expect(try #require(manager.group(containing: 1)).members == [1, 2])
+        #expect(try #require(manager.group(containing: 3)).members == [3, 4])
+    }
+
+    @Test func shortcutsActOnTheFocusedGroup() throws {
+        // No app is frontmost in tests, so there's no focused group: shortcuts do nothing.
+        let before = try #require(manager.group(containing: 1)).activeID
+        manager.perform(.next)
+        #expect(manager.group(containing: 1)?.activeID == before)
+    }
+
+    @Test func everyShortcutHasItsOwnKeyCombination() {
+        let combos = HotKeys.bindings.map { "\($0.1)-\($0.2)" }
+        #expect(Set(combos).count == combos.count)
+        #expect(HotKeys.bindings.count == HotKeys.Action.allCases.count)
     }
 }

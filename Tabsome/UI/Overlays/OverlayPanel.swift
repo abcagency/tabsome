@@ -16,7 +16,10 @@ final class OverlayPanel: NSPanel {
         isReleasedWhenClosed = false
         // S7: overlays that sit over another app's content never take its clicks.
         ignoresMouseEvents = clickThrough
-        collectionBehavior = [.managed, .fullScreenNone, .ignoresCycle]
+        // Hidden from Mission Control and App Exposé (`.transient`), so Tabsome never shows up
+        // there as an app with windows of its own; Spaces behavior stays the default, so a strip
+        // stays on its window's Space. Not in ⌘` window cycling either.
+        collectionBehavior = [.transient, .fullScreenNone, .ignoresCycle]
     }
 
     /// Puts `view` inside a plain container that fills the panel. The panel's frame always comes
@@ -32,6 +35,10 @@ final class OverlayPanel: NSPanel {
         contentView = container
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Only while the user types into it (renaming a tab, §5.10). A non-activating panel can be
+    /// key without activating Tabsome, the way Spotlight takes typing.
+    var allowsKey = false
+
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }

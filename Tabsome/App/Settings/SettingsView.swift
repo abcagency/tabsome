@@ -10,6 +10,9 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape") {
                 GeneralSettingsView(model: model)
             }
+            Tab("Tabs", systemImage: "rectangle.topthird.inset.filled") {
+                TabsSettingsView(model: model)
+            }
             Tab("About", systemImage: "info.circle") {
                 AboutSettingsView()
             }
@@ -124,6 +127,113 @@ struct AppearanceThumbnail: View {
                 p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
                 p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
                 p.closeSubpath()
+            }
+        }
+    }
+}
+
+/// Settings › Tabs (PLAN.md §7 Phase 6 has the full list; Tab position comes first so both
+/// placements can be used and tested).
+struct TabsSettingsView: View {
+    let model: AppModel
+
+    var body: some View {
+        @Bindable var model = model
+        let position = Binding<TabPlacement>(
+            get: { model.tabPlacement.isLeft ? .left : .top },
+            set: { model.tabPlacement = $0 == .top ? .top : (UserDefaults.standard.string(forKey: Self.leftStyleKey) == "named" ? .leftNamed : .left) })
+        Form {
+            Section("Tab position") {
+                TabPositionPicker(selection: position)
+                    .frame(maxWidth: .infinity)
+                if model.tabPlacement.isLeft {
+                    Picker("Left tabs", selection: $model.tabPlacement) {
+                        Text("Compact (icons only)").tag(TabPlacement.left)
+                        Text("With names").tag(TabPlacement.leftNamed)
+                    }
+                    .pickerStyle(.radioGroup)
+                    .onChange(of: model.tabPlacement) { _, new in
+                        if new.isLeft { UserDefaults.standard.set(new == .leftNamed ? "named" : "compact", forKey: Self.leftStyleKey) }
+                    }
+                }
+                Text(description)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+extension TabsSettingsView {
+    /// Remembers which Left style to come back to after switching to Top and back.
+    static let leftStyleKey = "leftTabStyle"
+
+    var description: String {
+        switch model.tabPlacement {
+        case .top: "Tabs sit above the window and show each app’s name."
+        case .left: "Tabs sit down the window’s left side and show only app icons. Hover a tab for its name."
+        case .leftNamed: "Tabs sit down the window’s left side with each tab’s icon and name; long names end in an ellipsis."
+        }
+    }
+}
+
+/// Two small previews: Top shows app names, Left shows icons only.
+struct TabPositionPicker: View {
+    @Binding var selection: TabPlacement
+
+    var body: some View {
+        HStack(spacing: 28) {
+            ForEach([TabPlacement.top, .left], id: \.self) { placement in
+                Button { selection = placement } label: {
+                    VStack(spacing: 6) {
+                        preview(placement)
+                            .frame(width: 96, height: 62)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(selection == placement ? Color.accentColor : Color.secondary.opacity(0.3),
+                                                  lineWidth: selection == placement ? 3 : 1)
+                            }
+                        Text(placement == .top ? "Top" : "Left")
+                            .font(.callout)
+                            .foregroundStyle(selection == placement ? .primary : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(placement == .top ? "Tabs on top, with app names" : "Tabs on the left, icons only")
+                .accessibilityAddTraits(selection == placement ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder private func preview(_ placement: TabPlacement) -> some View {
+        let window = RoundedRectangle(cornerRadius: 6).fill(.background).overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
+        let chip = { (c: Color) in RoundedRectangle(cornerRadius: 2).fill(c) }
+        ZStack {
+            RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+            if placement == .top {
+                VStack(spacing: 2) {
+                    HStack(spacing: 3) {
+                        ForEach([Color.blue, .orange], id: \.self) { c in
+                            HStack(spacing: 2) { chip(c).frame(width: 6, height: 6); Capsule().fill(.secondary).frame(width: 18, height: 3) }
+                        }
+                        Spacer()
+                    }
+                    .frame(height: 9)
+                    window
+                }
+                .padding(8)
+            } else {
+                HStack(spacing: 2) {
+                    VStack(spacing: 3) {
+                        ForEach([Color.blue, .orange, .green], id: \.self) { c in chip(c).frame(width: 8, height: 8) }
+                        Spacer()
+                    }
+                    .frame(width: 10)
+                    window
+                }
+                .padding(8)
             }
         }
     }

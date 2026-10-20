@@ -9,6 +9,16 @@ final class AppModel {
     let groups: GroupManager
     let appearance = AppearanceController()
     let launchAtLogin = LaunchAtLogin()
+    @ObservationIgnored let hotKeys = HotKeys()
+
+    static let tabPlacementKey = "tabPlacement"
+    /// Settings › Tabs › Tab position (PLAN.md §5.6). Applies to every group live.
+    var tabPlacement: TabPlacement {
+        didSet {
+            UserDefaults.standard.set(tabPlacement.rawValue, forKey: Self.tabPlacementKey)
+            groups.setPlacement(tabPlacement)
+        }
+    }
     @ObservationIgnored private(set) lazy var drag = DragCoordinator(registry: registry, groups: groups)
 
     @ObservationIgnored private lazy var onboarding = OnboardingWindowController(model: self)
@@ -22,7 +32,12 @@ final class AppModel {
     init(windowSystem: WindowSystem = AXWindowSystem()) {
         registry = WindowRegistry(system: windowSystem)
         groups = GroupManager(registry: registry, system: windowSystem)
+        tabPlacement = UserDefaults.standard.string(forKey: Self.tabPlacementKey).flatMap(TabPlacement.init(rawValue:)) ?? .top
+        groups.setPlacement(tabPlacement)
         groups.confirmCloseAll = Self.confirmCloseAll
+        hotKeys.onAction = { [weak self] action in self?.groups.perform(action) }
+        // Registered only while a group is focused, so the keys reach other apps otherwise.
+        groups.onFocusedGroupChanged = { [weak self] gid in self?.hotKeys.isEnabled = gid != nil }
         permissions.onAccessibilityChange = { [weak self] granted in
             guard let self else { return }
             // Without the permission Tabsome stops all behavior (PLAN.md §5.8).
@@ -44,6 +59,7 @@ final class AppModel {
     }
 
     func stopAll() {
+        hotKeys.isEnabled = false
         drag.stop()
         groups.abandonAll()
         registry.stop()

@@ -238,7 +238,7 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
 - One `NSPanel` per group:
   - style: `.borderless` + `.nonactivatingPanel`
   - `isFloatingPanel = false`
-  - `collectionBehavior = [.managed, .fullScreenNone]`
+  - `collectionBehavior = [.transient, .fullScreenNone, .ignoresCycle]`: hidden from Mission Control and App Exposé, so Tabsome never appears there as an app with windows of its own (found in Phase 4; `.managed` listed the strips). The Spaces behavior stays the default, so the strip stays on its window's Space
   - `hidesOnDeactivate = false`
   - clicks don't steal focus from the tabbed app
 - **Z-order (verified in Phase 0):** the strip must sit right above the group's window but *below* any other window covering it, so we can't use a floating level. Keep it at normal level and call `order(.above, relativeTo: activeWindowCGWindowID)` whenever focus or order changes.
@@ -284,7 +284,9 @@ Every row matches Safari/Chrome unless it says otherwise (§1, "works like brows
 | Double-click empty strip area | Same as double-clicking a title bar on this Mac (zoom or minimize, per System Settings) |
 | Click "+" | Menu of other open windows; choosing one adds it as the last tab |
 | Double-click tab | **Rename inline** (§5.10). The first click still switches to the tab. *(Not a browser behavior; matches Finder renaming)* |
-| Right-click tab | Same order as Chrome: **Close Tab**, **Close Other Tabs**, **Close Tabs to the Right**, separator, **Move Tab to New Window** (tear it out in place), separator, **Rename Tab…**, **Reset Name** (only when renamed) |
+| Right-click tab | Same order as Chrome: **Close Tab**, **Close Other Tabs**, **Close Tabs to the Right**, separator, **Move Tab to New Window** (tear it out in place), separator, **Rename Tab…**, **Reset Name** (only when renamed). With several tabs selected: **Close *N* Tabs** and **Move *N* Tabs to New Window** |
+| **⇧-click / ⌘-click tabs** (added in Phase 4) | **Select several tabs**, like Chrome and Safari: ⇧-click selects the range from the anchor tab to the clicked one, ⌘-click adds or removes one tab, and a plain click goes back to one. The active tab is always selected. Selected tabs get a subtle accent tint |
+| Drag a selected tab | **The whole selection comes along**, in order, and the grabbed tab becomes active. Dropped in empty space, the selected tabs become **a group of their own** there (a single tab becomes a normal window, as before); dropped on another group's strip or a window's middle (after the pause), they all move there. The 50-tab limit counts the whole selection |
 
 **Keyboard shortcuts.** Same layout as browser shortcuts. ⌘ and ⌃Tab can't be used globally because they'd steal the apps' own shortcuts (Safari's ⌃Tab, every app's ⌘W). So Tabsome uses ⌃⌥ in their place. All are rebindable in Settings › Shortcuts.
 
@@ -728,6 +730,28 @@ Found by hand and fixed:
 
 Deferred, by plan: rename items in the right-click menu (4b), and Left mode's "Close Tabs Below" wording (4b).
 
+**4b (2026-10-20): done.** Checked by hand and approved:
+- renaming: double-click a tab, the right-click menu, or ⌃⌥R. Names are trimmed and capped at 60 characters, and clearing a name restores the window title. Losing focus saves what has been typed so far; Esc cancels.
+- the ⌃⌥ shortcuts (next/previous tab, tabs 1–8, last tab, close, move to a new window, rename). They're registered only while a group is focused (S5).
+- Left placement in two styles, set in Settings › Tabs: **Compact** (icons, with the name tooltip and a × badge on hover) and **With names** (a 180 pt column with icon, name truncated with "…", and ×). Left mode's menu says "Close Tabs Below".
+- multi-select: ⇧-click selects a range and ⌘-click toggles a tab. The selection can be torn off into a new group, moved onto another group's strip, closed, or moved to a new window together.
+- Mission Control: overlay panels are `.transient`, so they no longer show up as a separate app (§5.6).
+- corner fillets: the strip's glass extends into the gaps outside the window's rounded corners.
+
+Found by hand and fixed:
+- **One window stayed outside after a multi-tab merge:** an app sometimes moves a window again after Tabsome places it. Groups now ignore that for one second after Tabsome moves them, then run a settle check that puts any stray member back.
+- **Hover didn't work in Left mode:** the cursor's coordinates were flipped twice.
+- **The fillet band would have caught clicks meant for the app's title bar:** the strip now uses two panels: a click-through glass panel directly above the window, and the clickable strip above that.
+
+123 unit tests in total. The new ones cover:
+- selection
+- the Left layouts
+- renaming and committing a rename
+- the shortcuts' actions
+- multi-tab tear-off and moves
+- the settle check
+- the fillet geometry
+
 ### Phase 5 — Robustness
 - Corner-parking fallback for misfit windows.
 - Full screen, minimize, Spaces, multiple displays.
@@ -789,7 +813,7 @@ Deferred, by plan: rename items in the right-click menu (4b), and Left mode's "C
 | Proxy-to-real-window swap shows a visible pop (the app's window lands late or at a slightly different size) | Wait for the AX "moved/resized" confirmation before fading the proxy, with a short timeout. Re-read the real frame and spring the proxy to it before revealing |
 | User denies Screen Recording | Icon-card proxies (§5.9). Every feature still works |
 | Losing windows if Tabsome crashes while windows are parked | Recovery file written on every group change. Next launch un-parks everything |
-| Mission Control, App Exposé, and the ⌘Tab window list show a group's windows as **separate windows** | Expected: they really are separate windows, and macOS gives no way to merge them there. Document it in the FAQ so it isn't reported as a bug. Choosing an inactive tab's window from Mission Control is handled as a tab switch (§5.8) |
+| Mission Control, App Exposé, and the ⌘Tab window list show a group's windows as **separate windows** | Expected: they really are separate windows, and macOS gives no way to merge them there. Document it in the FAQ so it isn't reported as a bug. Choosing an inactive tab's window from Mission Control is handled as a tab switch (§5.8). Tabsome's own overlays (strips, highlight, proxies) are hidden from Mission Control (§5.6) |
 | Private `_AXUIElementGetWindow` breaks in a future macOS | Isolated behind `WindowSystem`. Fallback: match AX windows to CG windows by pid, frame, and title |
 
 ## 9. Testing strategy

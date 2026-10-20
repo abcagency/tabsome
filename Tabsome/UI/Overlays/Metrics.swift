@@ -29,6 +29,9 @@ enum Metrics {
     // macOS puts them (inset 9, centre 16) and the strip reads as the window's title bar.
     static let topStripHeight: CGFloat = titleBarHeight
     static let leftStripWidth: CGFloat = 40             // not measured (no system equivalent); plan §5.6
+    /// Left mode "With names": a fixed width, so windows don't resize as tabs come and go;
+    /// longer names get an ellipsis.
+    static let leftNamedStripWidth: CGFloat = 180
 
     // Shape
     static let windowCornerRadius: CGFloat = 16         // NSWindow._cornerRadius, all styles; captures ≈17 incl. antialiasing

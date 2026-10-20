@@ -15,9 +15,17 @@ final class GroupManager {
     @ObservationIgnored private var resyncTimers: [UUID: Timer] = [:]
     @ObservationIgnored private var liveDrag: (group: UUID, startContent: CGRect)?
     @ObservationIgnored private var stripDrag: (group: UUID, startContent: CGRect, startMouse: CGPoint, inFlight: Bool, pending: CGPoint?)?
-    @ObservationIgnored private var tearOff: (window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize)?
+    /// Tabs being torn out of a strip: the grabbed one (its ghost follows the cursor) and any
+    /// others selected with it, in strip order.
+    @ObservationIgnored private var tearOff: (windows: [CGWindowID], window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize)?
     /// Groups whose background tabs are tucked away while the group moves or resizes.
     @ObservationIgnored private var tucked: Set<UUID> = []
+    /// Groups Tabsome is moving windows in (a merge, a new group, Fill, a placement change):
+    /// frame reports from them in this window aren't the user moving the group (see `settleCheck`).
+    @ObservationIgnored private var settlingUntil: [UUID: TimeInterval] = [:]
+    @ObservationIgnored private var settleTimers: [UUID: Timer] = [:]
+    /// How long after Tabsome moves a group's windows their reports count as part of that move.
+    @ObservationIgnored var settleDuration: TimeInterval = 1.0
     @ObservationIgnored private var workspaceObserver: NSObjectProtocol?
     /// Apps Tabsome itself just activated: their focus events aren't the user switching tabs.
     @ObservationIgnored private var ownActivation: [pid_t: TimeInterval] = [:]
@@ -27,6 +35,9 @@ final class GroupManager {
     @ObservationIgnored var animates = true
     /// The window server's current bounds for a window (replaced in tests).
     @ObservationIgnored var windowBounds: (CGWindowID) -> CGRect? = { ScreenWindows.bounds(of: $0) }
+    /// The group whose active window belongs to the frontmost app: the shortcuts act on it (§5.7).
+    @ObservationIgnored private(set) var focusedGroup: UUID?
+    @ObservationIgnored var onFocusedGroupChanged: ((UUID?) -> Void)?
     /// Asked before the red button closes every tab (PLAN.md §5.11); returns false to cancel.
     @ObservationIgnored var confirmCloseAll: ((_ count: Int) -> Bool)?
 
@@ -93,6 +104,7 @@ final class GroupManager {
         for w in windows { groupOf[w] = group.id }
         groups[group.id] = group
         let gid = group.id
+        markSettling(gid)
         FileLog.shared.write("merge windows=\(windows.count) into=\(t) group=\(gid.uuidString.prefix(8)) tabs=\(group.count)")
 
         activateWindow(cover) {
@@ -101,10 +113,14 @@ final class GroupManager {
                 let strip = self.strip(for: g)
                 strip.place(content: g.content, above: cover)
                 strip.show()
-                guard let proxy else { return self.activateWindow(active) }
+                guard let proxy else {
+                    self.activateWindow(active)
+                    return self.scheduleSettleCheck(gid)
+                }
                 Task { @MainActor in
                     await proxy.spring(to: g.content)
                     self.activateWindow(active)
+                    self.scheduleSettleCheck(gid)
                     if let final = await WindowCapture.capture(active) { proxy.crossfade(to: final) }
                     await proxy.fadeOut()
                 }
@@ -131,10 +147,30 @@ final class GroupManager {
         resyncTimers.removeValue(forKey: gid)?.invalidate()
         strips.removeValue(forKey: gid)?.dismiss()
         tucked.remove(gid)
+        settleTimers.removeValue(forKey: gid)?.invalidate()
+        settlingUntil[gid] = nil
     }
 
-    /// Where new groups put their strip (Settings › Tabs › Tab position, PLAN.md §5.6).
-    @ObservationIgnored var placement: TabPlacement = .top
+    /// Where strips go (Settings › Tabs › Tab position, PLAN.md §5.6).
+    @ObservationIgnored private(set) var placement: TabPlacement = .top
+
+    /// Changing placement re-lays out every live group right away: the outer frame stays put,
+    /// the old side's strip space goes back, the new side's is taken, and each strip is rebuilt.
+    func setPlacement(_ new: TabPlacement) {
+        guard new != placement else { return }
+        placement = new
+        for (gid, var g) in groups {
+            let outer = g.outer
+            g.placement = new
+            g.content = StripLayout.frames(outer: outer, placement: new).content
+            groups[gid] = g
+            guard let strip = strips[gid] else { continue }
+            strip.placement = new
+            if !g.isMinimized { strip.place(content: g.content, above: g.activeID) }
+            markSettling(gid)
+            syncMembers(of: gid, reconcile: true) { self.scheduleSettleCheck(gid) }
+        }
+    }
 
     /// For the drag coordinator: a group's strip under the cursor and where a drop would land.
     func stripHit(panel: CGWindowID, cursor: CGPoint, excluding: UUID?, incoming: Int) -> DropTargetResolver.StripHit? {
@@ -213,19 +249,24 @@ final class GroupManager {
         g.previousOuter = next.previous
         g.content = StripLayout.frames(outer: next.outer, placement: g.placement).content
         groups[gid] = g
+        markSettling(gid)
         strips[gid]?.place(content: g.content, above: g.activeID)
-        syncMembers(of: gid, reconcile: true, activeFirst: true)
+        syncMembers(of: gid, reconcile: true, activeFirst: true) { self.scheduleSettleCheck(gid) }
     }
 
     // MARK: Tear-out (§5.7)
 
-    func tearOffBegan(_ id: CGWindowID, cursor: CGPoint) {
+    func tearOffBegan(_ id: CGWindowID, cursor: CGPoint) { tearOffBegan([id], grabbed: id, cursor: cursor) }
+
+    /// `ids` are the selected tabs (just `grabbed` unless several were selected), in strip order.
+    func tearOffBegan(_ ids: [CGWindowID], grabbed id: CGWindowID, cursor: CGPoint) {
         guard let gid = groupOf[id], let g = groups[gid], let entry = registry.windows[id] else { return }
+        let windows = ids.filter { groupOf[$0] == gid }
         let frame = tearOffFrame(cursor: cursor, size: g.content.size)
         let proxy = animates ? WindowProxy(image: nil, appPID: entry.app.pid, appName: entry.app.name, on: frame) : nil
         proxy?.show(at: frame, lifted: true)
-        tearOff = (id, gid, proxy, g.content.size)
-        targeting?.tabDragBegan(window: id, group: gid)
+        tearOff = (windows.isEmpty ? [id] : windows, id, gid, proxy, g.content.size)
+        targeting?.tabDragBegan(window: id, group: gid, count: max(1, windows.count))
         Task { @MainActor in
             if let image = await WindowCapture.capture(id), self.tearOff?.window == id { proxy?.setImage(image) }
         }
@@ -247,12 +288,14 @@ final class GroupManager {
         let frame = tearOffFrame(cursor: cursor, size: t.size)
         switch targeting?.tabDragEnded() {
         case .drop(let target)?:
-            return moveTab(t.window, into: target, at: nil, from: frame, proxy: t.proxy)
+            return moveTabs(t.windows, active: t.window, into: target, at: nil, from: frame, proxy: t.proxy)
         case .dropOnStrip(let target, let index)?:
-            return moveTab(t.window, into: target, at: index, from: frame, proxy: t.proxy)
+            return moveTabs(t.windows, active: t.window, into: target, at: index, from: frame, proxy: t.proxy)
         default:
             break
         }
+        // Several tabs dropped in empty space become a group of their own there.
+        if t.windows.count > 1 { return formGroup(t.windows, active: t.window, content: frame, proxy: t.proxy) }
         FileLog.shared.write("tear out window=\(t.window)")
         removeMember(t.window, closing: false)
         setFrame(t.window, frame) { landed in
@@ -274,12 +317,51 @@ final class GroupManager {
 
     /// A tab leaves its group for another window or group (dragged there, or picked from "+").
     private func moveTab(_ id: CGWindowID, into target: CGWindowID, at index: Int?, from frame: CGRect, proxy: WindowProxy?) {
-        guard groupOf[target] != groupOf[id] || groupOf[id] == nil, canAbsorb(1, into: target) else {
+        moveTabs([id], active: id, into: target, at: index, from: frame, proxy: proxy)
+    }
+
+    /// Several tabs (a selection) move together, in order; `active` becomes the active tab.
+    private func moveTabs(_ ids: [CGWindowID], active: CGWindowID, into target: CGWindowID, at index: Int?,
+                          from frame: CGRect, proxy: WindowProxy?) {
+        guard !ids.contains(target), groupOf[target] == nil || groupOf[target] != groupOf[active] || groupOf[active] == nil,
+              canAbsorb(ids.count, into: target) else {
             proxy?.dismiss()
             return
         }
-        removeMember(id, closing: false)
-        absorb([id], active: id, into: target, at: index, dropFrame: frame, proxy: proxy)
+        for id in ids { removeMember(id, closing: false) }
+        absorb(ids, active: active, into: target, at: index, dropFrame: frame, proxy: proxy)
+    }
+
+    /// Selected tabs dropped in empty space, or "Move N Tabs to New Window": they leave their group
+    /// and become a group of their own at `content` (§5.7).
+    private func formGroup(_ ids: [CGWindowID], active: CGWindowID, content: CGRect, proxy: WindowProxy?) {
+        for id in ids { removeMember(id, closing: false) }
+        let members = ids.filter { registry.windows[$0] != nil && groupOf[$0] == nil }
+        guard members.count > 1, members.contains(active) else {
+            proxy?.dismiss()
+            if let only = members.first { setFrame(only, content) { _ in self.activateWindow(only) } }
+            return
+        }
+        let group = TabGroup(members: members, active: active, content: content, placement: placement)
+        for id in members { groupOf[id] = group.id }
+        groups[group.id] = group
+        let gid = group.id
+        markSettling(gid)
+        FileLog.shared.write("new group from tabs=\(members.count) group=\(gid.uuidString.prefix(8))")
+        syncMembers(of: gid, reconcile: true) {
+            guard let g = self.groups[gid] else { return }
+            let strip = self.strip(for: g)
+            self.activateWindow(active) {
+                strip.place(content: g.content, above: active)
+                strip.show()
+                self.scheduleSettleCheck(gid)
+            }
+            guard let proxy else { return }
+            Task { @MainActor in
+                await proxy.spring(to: g.content)
+                await proxy.fadeOut()
+            }
+        }
     }
 
     // MARK: Strip menus and buttons (§5.6, §5.7)
@@ -290,6 +372,16 @@ final class GroupManager {
         g.move(id, to: index)
         groups[gid] = g
         refreshStrip(gid)
+    }
+
+    func closeTabs(_ ids: [CGWindowID]) {
+        for id in ids { close(id) }
+    }
+
+    /// "Move N Tabs to New Window": a single tab becomes a normal window; several become a group.
+    func moveToNewWindow(_ ids: [CGWindowID], active: CGWindowID) {
+        guard ids.count > 1, let g = group(containing: active) else { return moveToNewWindow(active) }
+        formGroup(ids, active: active, content: g.content.offsetBy(dx: 22, dy: 22), proxy: nil)
     }
 
     func closeOthers(_ id: CGWindowID) {
@@ -335,6 +427,57 @@ final class GroupManager {
 
     /// Double-click empty strip area: what a title-bar double-click does on this Mac (§5.7),
     /// per System Settings › Desktop & Dock.
+    // MARK: Renaming (§5.10)
+
+    /// Saves a tab's name (trimmed, at most 60 characters; empty resets it), then gives the keyboard
+    /// back to the tab's window.
+    func rename(_ id: CGWindowID, to name: String?, refocus: Bool = true) {
+        registry.setCustomName(name, for: id)
+        if let gid = groupOf[id] { refreshStrip(gid) }
+        if refocus { self.refocus(id) }
+    }
+
+    /// The rename field had the keyboard; return it to the group's active window.
+    func refocus(_ id: CGWindowID) {
+        guard let g = group(containing: id) else { return }
+        activateWindow(g.activeID)
+    }
+
+    /// ⌃⌥R and the right-click menu: start renaming a tab in its strip.
+    func beginRename(_ id: CGWindowID) {
+        guard let gid = groupOf[id] else { return }
+        strips[gid]?.beginRename(id)
+    }
+
+    // MARK: Shortcuts (§5.7)
+
+    private func updateFocus() {
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focused = groups.values.first { !$0.isMinimized && registry.windows[$0.activeID]?.app.pid == front }?.id
+        guard focused != focusedGroup else { return }
+        focusedGroup = focused
+        onFocusedGroupChanged?(focused)
+    }
+
+    /// ⌃⌥Tab / ⌃⌥⇧Tab wrap around; ⌃⌥1–8 go to that tab; ⌃⌥9 is the last tab; ⌃⌥W closes the
+    /// active tab; ⌃⌥⇧N moves it out; ⌃⌥R renames it.
+    func perform(_ action: HotKeys.Action) {
+        updateFocus()
+        guard let gid = focusedGroup, let g = groups[gid] else { return }
+        let i = g.activeIndex, n = g.count
+        switch action {
+        case .next: activate(g.members[(i + 1) % n])
+        case .previous: activate(g.members[(i - 1 + n) % n])
+        case .tab1, .tab2, .tab3, .tab4, .tab5, .tab6, .tab7, .tab8:
+            let k = Int(action.rawValue - HotKeys.Action.tab1.rawValue)
+            if k < n { activate(g.members[k]) }
+        case .last: activate(g.members[n - 1])
+        case .close: close(g.activeID)
+        case .moveToNewWindow: moveToNewWindow(g.activeID)
+        case .rename: beginRename(g.activeID)
+        }
+    }
+
     func stripDoubleClicked(_ gid: UUID) {
         switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
         case "Minimize": minimize(gid)
@@ -422,6 +565,7 @@ final class GroupManager {
         for id in g.members { groupOf[id] = nil }
         resyncTimers.removeValue(forKey: gid)?.invalidate()
         if let strip = strips.removeValue(forKey: gid) { strip.dismiss() }
+        updateFocus()
         guard let last = g.members.first else { return }
         FileLog.shared.write("dissolve group=\(gid.uuidString.prefix(8))")
         // The last window grows back into the strip's space (§5.8).
@@ -450,6 +594,7 @@ final class GroupManager {
         resyncTimers.removeAll()
         strips.values.forEach { $0.dismiss() }
         strips.removeAll()
+        updateFocus()
         let tracker = RestoreTracker(done: done)
         for g in all {
             let order = [g.activeID] + g.inactive
@@ -479,6 +624,7 @@ final class GroupManager {
         strips.removeAll()
         groups.removeAll()
         groupOf.removeAll()
+        updateFocus()
     }
 
     // MARK: Registry events (§5.8)
@@ -499,6 +645,12 @@ final class GroupManager {
         guard old?.window.frame != w.frame, !g.isMinimized, liveDrag?.group != gid, stripDrag?.group != gid else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if expected.isExpected(w.frame, for: id, now: now) { return }
+        // While the mouse is down, a move or resize is the user's, settling or not.
+        if let until = settlingUntil[gid], now < until, NSEvent.pressedMouseButtons & 1 == 0 {
+            // Tabsome is still moving this group's windows: an in-between frame (or a window that
+            // lagged behind) isn't the user moving the group. Check again once things settle.
+            return scheduleSettleCheck(gid)
+        }
         if id == g.activeID {
             // The user moved or resized the active window: the group follows it. While the
             // mouse is down (resizing from an edge), the background tabs are tucked away.
@@ -552,6 +704,7 @@ final class GroupManager {
     }
 
     private func appActivated(_ pid: pid_t) {
+        defer { updateFocus() }
         let own = isOwnActivation(pid)
         for (gid, g) in groups where !g.isMinimized {
             if !own, let main = registry.mainWindow[pid], g.inactive.contains(main) {
@@ -589,6 +742,34 @@ final class GroupManager {
 
     /// Writes the group frame to every member that isn't there yet. With `reconcile`, the group
     /// then adopts the strictest frame the members actually took (Terminal's grid) and re-applies it.
+    private func markSettling(_ gid: UUID) {
+        settlingUntil[gid] = ProcessInfo.processInfo.systemUptime + settleDuration
+    }
+
+    private func scheduleSettleCheck(_ gid: UUID, after delay: TimeInterval = 0.35) {
+        settleTimers[gid]?.invalidate()
+        settleTimers[gid] = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.settleTimers[gid] = nil
+                self?.settleCheck(gid)
+            }
+        }
+    }
+
+    /// After Tabsome moves a group's windows, every member must actually be at the group frame.
+    /// A window whose report arrived mid-move, or whose app answered late, is put back (found in
+    /// Phase 4: one window of a multi-tab merge could be left outside the group).
+    func settleCheck(_ gid: UUID) {
+        guard let g = groups[gid], !g.isMinimized, !tucked.contains(gid), liveDrag?.group != gid, stripDrag?.group != gid else { return }
+        for id in g.members {
+            guard let actual = windowBounds(id) ?? registry.windows[id]?.window.frame else { continue }
+            if !ExpectedFrames.close(actual, g.content) {
+                FileLog.shared.write("settle: window=\(id) was off the group frame; putting it back")
+                setFrame(id, g.content)
+            }
+        }
+    }
+
     /// Moving or resizing the active window would expose the background tabs it was covering,
     /// so they go to a screen corner (one write each) and come back on mouse up, when the group
     /// is re-synced: two writes per tab per interaction instead of a stream (P3).
@@ -684,7 +865,7 @@ final class GroupManager {
             closeAll: { [weak self] in self?.closeAll(gid) },
             minimize: { [weak self] in self?.minimize(gid) },
             fill: { [weak self] in self?.toggleFill(gid) },
-            tearOffBegan: { [weak self] id, p in self?.tearOffBegan(id, cursor: p) },
+            tearOffBegan: { [weak self] ids, grabbed, p in self?.tearOffBegan(ids, grabbed: grabbed, cursor: p) },
             tearOffMoved: { [weak self] p in self?.tearOffMoved(cursor: p) },
             tearOffEnded: { [weak self] p in self?.tearOffEnded(cursor: p) },
             tearOffCancelled: { [weak self] in self?.tearOffCancelled() },
@@ -693,10 +874,14 @@ final class GroupManager {
             reorder: { [weak self] id, index in self?.reorder(id, to: index) },
             closeOthers: { [weak self] id in self?.closeOthers(id) },
             closeToTheRight: { [weak self] id in self?.closeToTheRight(id) },
-            moveToNewWindow: { [weak self] id in self?.moveToNewWindow(id) },
+            moveToNewWindow: { [weak self] ids, active in self?.moveToNewWindow(ids, active: active) },
+            closeTabs: { [weak self] ids in self?.closeTabs(ids) },
             addCandidates: { [weak self] in self?.addCandidates(for: gid) ?? [] },
             add: { [weak self] id in self?.add(id, to: gid) },
-            doubleClicked: { [weak self] in self?.stripDoubleClicked(gid) }))
+            doubleClicked: { [weak self] in self?.stripDoubleClicked(gid) },
+            rename: { [weak self] id, name, refocus in self?.rename(id, to: name, refocus: refocus) },
+            cancelRename: { [weak self] id in self?.refocus(id) }))
+        strip.placement = g.placement
         strips[g.id] = strip
         refreshStrip(g.id)
         return strip
@@ -706,10 +891,12 @@ final class GroupManager {
         guard let g = groups[gid], let strip = strips[gid] else { return }
         let entries = g.members.compactMap { registry.windows[$0] }
         let tabs = entries.map { e in
-            TabItem(id: e.id, label: TabLabel.label(for: e, among: entries), pid: e.app.pid, title: e.window.title, isActive: e.id == g.activeID)
+            TabItem(id: e.id, label: TabLabel.label(for: e, among: entries, customName: registry.customNames[e.id]), pid: e.app.pid,
+                    title: e.window.title, isActive: e.id == g.activeID, isRenamed: registry.customNames[e.id] != nil)
         }
         let focused = registry.windows[g.activeID].map { NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.app.pid } ?? false
         strip.update(tabs: tabs, focused: focused)
+        updateFocus()
     }
 
     // MARK: Screens

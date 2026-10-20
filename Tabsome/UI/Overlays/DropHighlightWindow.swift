@@ -20,12 +20,12 @@ final class DropHighlightWindow {
         panel.setHostedContent(host)
     }
 
-    func show(targetFrame: CGRect, above target: CGWindowID, tabs: [GhostTab]) {
+    func show(targetFrame: CGRect, above target: CGWindowID, tabs: [GhostTab], placement: TabPlacement = .top) {
         hideGeneration += 1
-        let strip = Metrics.topStripHeight
         let m = Self.margin
-        let outer = CGRect(x: targetFrame.minX - m, y: targetFrame.minY - strip - m,
-                           width: targetFrame.width + 2 * m, height: targetFrame.height + strip + 2 * m)
+        let withStrip = StripLayout.outer(content: targetFrame, placement: placement)
+        let outer = withStrip.insetBy(dx: -m, dy: -m)
+        model.placement = placement
         panel.setFrame(ScreenGeometry.appKitRect(fromCG: outer), display: false)
         model.tabs = tabs
         model.margin = m
@@ -54,6 +54,7 @@ final class DropHighlightModel {
     var visible = false
     var tabs: [GhostTab] = []
     var margin: CGFloat = 0
+    var placement: TabPlacement = .top
 }
 
 private struct DropHighlightView: View {
@@ -62,13 +63,23 @@ private struct DropHighlightView: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metrics.windowCornerRadius, style: .continuous)
-        VStack(spacing: 0) {
-            GhostStrip(tabs: model.tabs)
-                .frame(height: Metrics.topStripHeight)
-            shape
-                .fill(Color.accentColor.opacity(0.12))
-                .glassEffect(.regular.tint(Color.accentColor.opacity(0.25)), in: shape)
-                .overlay(shape.strokeBorder(Color.accentColor.opacity(contrast == .increased ? 0.95 : 0.6), lineWidth: contrast == .increased ? 3 : 2))
+        let highlight = shape
+            .fill(Color.accentColor.opacity(0.12))
+            .glassEffect(.regular.tint(Color.accentColor.opacity(0.25)), in: shape)
+            .overlay(shape.strokeBorder(Color.accentColor.opacity(contrast == .increased ? 0.95 : 0.6), lineWidth: contrast == .increased ? 3 : 2))
+        Group {
+            if model.placement == .top {
+                VStack(spacing: 0) {
+                    GhostStrip(tabs: model.tabs).frame(height: Metrics.topStripHeight)
+                    highlight
+                }
+            } else {
+                HStack(spacing: 0) {
+                    GhostColumn(tabs: model.tabs, named: model.placement == .leftNamed)
+                        .frame(width: StripLayout.thickness(model.placement))
+                    highlight
+                }
+            }
         }
         .padding(model.margin)
         .opacity(model.visible ? 1 : 0)
@@ -99,6 +110,38 @@ private struct GhostStrip: View {
         .padding(.horizontal, 3)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .glassEffect(.regular, in: UnevenRoundedRectangle(topLeadingRadius: Metrics.windowCornerRadius, topTrailingRadius: Metrics.windowCornerRadius, style: .continuous))
+    }
+}
+
+/// Left mode's preview: the icon column the group will get.
+private struct GhostColumn: View {
+    let tabs: [GhostTab]
+    let named: Bool
+
+    var body: some View {
+        let icon = named ? StripLayout.leftNamedIconSize : StripLayout.leftIconSize
+        VStack(spacing: named ? 4 : StripLayout.leftSlotHeight - StripLayout.leftIconSize) {
+            ForEach(tabs) { tab in
+                HStack(spacing: 6) {
+                    if let image = NSRunningApplication(processIdentifier: tab.pid)?.icon {
+                        Image(nsImage: image).resizable().frame(width: icon, height: icon)
+                    }
+                    if named {
+                        Text(tab.label).font(.system(size: 12, weight: tab.isNew ? .semibold : .regular)).lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(named ? 6 : 3)
+                .background {
+                    if tab.isNew { RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.2)) }
+                }
+                .padding(.horizontal, named ? 6 : 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, StripLayout.leftTopInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .glassEffect(.regular, in: UnevenRoundedRectangle(topLeadingRadius: Metrics.windowCornerRadius, bottomLeadingRadius: Metrics.windowCornerRadius, style: .continuous))
     }
 }
 
