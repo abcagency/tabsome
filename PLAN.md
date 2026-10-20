@@ -89,7 +89,7 @@ Consequences that shape the whole design:
 
 | Concern | Choice |
 |---|---|
-| Language | Swift 6 (strict concurrency, with the AX layer on `@MainActor`) |
+| Language | Swift 6 (strict concurrency). The registry and UI are `@MainActor`; AX calls run on one thread per app and never on the main thread (§6.2 P1), delivering plain-value events to the main actor |
 | UI | **AppKit** for overlay windows (precise control over level, ordering, and click-through); **SwiftUI** for the tab strip contents, menu bar menu, Settings, and onboarding |
 | Minimum macOS | **26 Tahoe**. One visual style, Liquid Glass, matching current macOS exactly, with the SwiftUI `glassEffect` APIs, `MenuBarExtra`, `SMAppService`, and current ScreenCaptureKit available without fallbacks |
 | Look | **Liquid Glass** throughout (§5.15): the tab strip, flyout, highlight, and menus use the system glass materials, not custom imitations |
@@ -611,6 +611,20 @@ Spikes live in `Spikes/` (see its README). They're one host app, `TabsomeSpikes.
 - Debug menu item (debug builds only) that dumps the registry. Titles appear only in this debug-build dump, never in logs.
 
 **Demo:** the menu bar icon appears, onboarding grants permission, and the debug dump lists every window with its frame and title.
+
+#### Phase 1 status (2026-10-20): done
+Everything above is built (see `README.md` for build, run, and test commands). Verified on this Mac:
+- **Demo:** the menu bar icon (badged while Accessibility is missing), onboarding through all three steps (by hand), and the debug dump listing every app's windows with frame, subrole, main/minimized/full-screen flags, and title. It matched an independent CGWindowList/AX census.
+- **Permission survives a rebuild:** a build with a new build number changed the binary's hash, and Accessibility stayed granted. Signing is manual (Apple Development identity, team `DM9Y3M74XK`) with **no provisioning profile**, so nothing expires. The only entitlement is the debug-only `get-task-allow`, with hardened runtime on.
+- **Live tracking:** an app launched after Tabsome started (TextEdit) was picked up with its window.
+- **Hung app (P1):** with a test app frozen at Tabsome's launch, Tabsome's main thread stayed on time, every other app was tracked, the frozen app was flagged unresponsive, and it was picked up with its windows once it answered again. This found and fixed a bug: a timeout during setup was treated as "still launching" and could give up for good.
+- **S1:** `scripts/check-ax-usage.sh` runs as the first build phase and is covered by tests (passes on the tree, fails on a planted violation). **S4:** no window title from the dump appears in the logs. **S8:** writes go only to `~/Library/Logs/Tabsome` and `~/Library/Application Support/Tabsome` (the debug dump).
+- 14 unit tests (Swift Testing): registry events against a fake `WindowSystem`, appearance mapping and persistence, log rotation, and the S1 check.
+
+Notes for later phases:
+- The registry also records non-standard windows (e.g. a browser's small `AXUnknown` popups). Phase 2's eligibility filter (`isStandard`, S6) keeps them out of grouping.
+- Launch at login and the Appearance picker are built, but not exercised by hand yet. Turning on Launch at login from a debug build registers that build's path.
+- Quitting currently just stops the registry; "untab everything, close nothing" (§5.12) arrives with groups in Phase 3.
 
 ### Phase 2 — Drag, dwell, highlight (no merging yet)
 - `DragMonitor`, `DropTargetResolver`, `DropZone`, and `DwellStateMachine`, with unit tests.

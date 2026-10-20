@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- No sandbox (PLAN.md §2) and no restricted entitlements, so no provisioning profile is needed.
+     Hardened runtime with library validation stays on: nothing here disables it (S2). -->
+<plist version="1.0">
+<dict/>
+</plist>
