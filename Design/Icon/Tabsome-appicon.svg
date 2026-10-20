@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4C8DFF"/>
+      <stop offset="1" stop-color="#1F55E6"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#000000" stroke-opacity="0.12"/>
+  <g transform="translate(226.29 226.29) scale(17.8571)">
+    <path fill="#FFFFFF" d="M6 3 H26 A4 4 0 0 1 30 7 V25 A4 4 0 0 1 26 29 H6 A4 4 0 0 1 2 25 V7 A4 4 0 0 1 6 3 Z M4 11 V25 A2 2 0 0 0 6 27 H26 A2 2 0 0 0 28 25 V11 Z"/>
+    <path fill="#FFFFFF" d="M13 11 H19 V21.5 A1.5 1.5 0 0 1 17.5 23 H14.5 A1.5 1.5 0 0 1 13 21.5 Z"/>
+  </g>
+</svg>

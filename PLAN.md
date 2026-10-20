@@ -592,6 +592,7 @@ Spikes live in `Spikes/` (see its README). They're one host app, `TabsomeSpikes.
 ### Phase 1 — Foundation
 - **git repository** (this folder isn't one yet) with a Swift/Xcode `.gitignore`. Commit `PLAN.md` first.
 - Xcode project, Swift 6, deployment target **macOS 26**, hardened runtime, no sandbox, `LSUIElement = YES`.
+- **Icons are already supplied:** `Tabsome/Assets.xcassets` has `AppIcon` (all ten macOS sizes) and `MenuBarIcon` (a template image, 16/32 px). Add the catalog to the app target and use `MenuBarIcon` for the `MenuBarExtra`. Vector sources (SVG, the menu bar PDF, a 1024 px PNG, `.icns`) are in `Design/Icon/`. The catalog compiles cleanly with `actool` for macOS 26.
 - Signed with your free Personal Team's Apple Development certificate. Confirm that the Accessibility permission **survives a rebuild** before moving on.
 - `MenuBarExtra` with the two-item menu: Settings… and Quit Tabsome (§1).
 - Settings window skeleton with the **Launch at login** toggle and the **Appearance** picker (§5.13), so every view built later is checked in both light and dark from the start (§7, Phase 6 has the full Settings list).
@@ -686,7 +687,7 @@ Spikes live in `Spikes/` (see its README). They're one host app, `TabsomeSpikes.
 - Accessibility: tab strip VoiceOver labels and full keyboard navigation.
 - **App badges on tabs** (§5.14), with the 3-second Dock check that runs only while groups exist.
 - Performance check against the §6.2 budgets in Instruments (Time Profiler, Allocations, Energy Log): 0% CPU and under 50 MB idle.
-- App icon and menu bar template icon.
+- App icon and menu bar template icon: **supplied** (`Tabsome/Assets.xcassets`, sources in `Design/Icon/`). Check them in the Dock, Finder, Settings, and the menu bar in light and dark, including how macOS 26+ frames a non-Icon Composer icon.
 
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
