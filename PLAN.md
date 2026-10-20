@@ -184,7 +184,7 @@ AX notifications ─► WindowRegistry ─────────────�
 ### 5.1 Detecting that the user is dragging a window
 - Watch global `leftMouseDown`, `leftMouseDragged`, and `leftMouseUp` events.
 - On mouse down, record the window under the cursor (CGWindowList hit test, then a WindowRegistry lookup).
-- If that window fires `kAXMovedNotification` while the button is still down **and its size is unchanged since mouse-down**, it's a **title-bar drag** of that window. (Resizing from the top or left edge moves the origin too; the size check rules it out.) The first `moved` arrives 120–170 ms into the drag, well inside the dwell.
+- If that window moves while the button is still down **and its size is unchanged since mouse-down**, it's a **title-bar drag** of that window. (Resizing from the top or left edge moves the origin too; the size check rules it out.) "Moves" is read from the **window server's bounds** for that one window on mouse-dragged events (≈0.7 ms, at most 30 times a second), which sees the move right away; an AX `moved` notification arrives 120–170 ms in and lags the real position (Phase 0, spike 3b).
 - This ignores text selection, scrolling, and resizing. A resize fires `kAXResizedNotification`, which we ignore for merge purposes. Verified with no false positives in Phase 0.
 - The global mouse monitor is delivered through `NSApp`'s event loop, so the main thread must never block or run a nested run loop.
 
@@ -632,6 +632,19 @@ Notes for later phases:
 - Mouse-only event monitoring (S5). Only `AXStandardWindow` subroles are eligible targets (S6). Overlays ignore mouse events (S7).
 
 **Demo:** dragging Finder over the middle of Safari and pausing lights up Safari. Moving away clears it.
+
+#### Phase 2 status (2026-10-20): done
+Built in `Core/Drag/` (`DragMonitor` with a pure `DragClassifier`, `DropTargetResolver`, `DropZone`, `DwellStateMachine`, `Eligibility`, `DragCoordinator`, `TabLabel`) and `UI/Overlays/` (`OverlayPanel`, `DropHighlightWindow`). Verified:
+- **Demo by hand:** Finder over Safari's middle with a pause lights Safari up with the glass highlight and a ghost strip ("Safari", "Finder"). Moving off the middle clears it. The highlight's look was approved.
+- **Synthesized, against the real app:** drag start → armed after the pause → disarmed off the middle → drag end; release while armed logs a drop (the Phase 3 hook); a 0.2 s pause never arms. Captures confirmed the highlight sits directly above the target and below the dragged window.
+- **Idle:** 0.0% CPU, 25 MB footprint, about one wakeup per sample. During a drag, CGWindowList is read at most 30 times a second, and the dwell uses a one-shot timer (the cursor is still, so no events arrive).
+- **S5:** only left-mouse down/dragged/up are monitored. **S6:** only standard, non-minimized, non-full-screen windows of non-excluded apps can be dragged or targeted, and nothing happens while secure input is on; the hard-coded list starts with authorization, Keychain, password-manager, and system apps (Phase 5 completes it). **S7:** the highlight panel ignores mouse events.
+- 44 unit tests in total, 30 new: dwell transitions (jitter, restart, arm, leave, drop, cancel, configurable dwell), zone geometry, target resolution (skips the dragged window, Tabsome's overlays, ineligible popups, and non-normal layers), drag vs. resize classification, eligibility, and tab labels (app name; "App — title" when two tabs share an app).
+
+Notes for later phases:
+- Resolving the target follows §5.2 literally: windows under the cursor that can't be tabbed (a browser's small popup, for example) are skipped, so the window behind them can still be the target.
+- The tab strip zone (no dwell, insertion marker) needs groups, so it arrives in Phase 4 as `armedOnStrip(target:insertIndex:)` in the same state machine.
+- The highlight uses the system accent color, so it's gray here, where the accent is Graphite.
 
 ### Phase 3 — Tabbing two windows together (the core loop)
 - `TabGroup`, `GroupManager.merge`, `FrameSync`, and stacking `Concealment`.

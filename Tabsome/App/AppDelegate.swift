@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         // Phase 3 adds "untab everything, close nothing" here (PLAN.md §5.12).
-        model.registry.stop()
+        model.stopAll()
         FileLog.shared.write("quit")
         FileLog.shared.flush()
     }

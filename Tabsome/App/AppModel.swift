@@ -8,6 +8,7 @@ final class AppModel {
     let registry: WindowRegistry
     let appearance = AppearanceController()
     let launchAtLogin = LaunchAtLogin()
+    @ObservationIgnored private(set) lazy var drag = DragCoordinator(registry: registry)
 
     @ObservationIgnored private lazy var onboarding = OnboardingWindowController(model: self)
 
@@ -22,7 +23,7 @@ final class AppModel {
         permissions.onAccessibilityChange = { [weak self] granted in
             guard let self else { return }
             // Without the permission Tabsome stops all behavior (PLAN.md §5.8).
-            if granted { registry.start() } else { registry.stop() }
+            if granted { start() } else { stopAll() }
         }
         registry.onAccessibilityDisabled = { [weak self] in self?.permissions.refresh() }
     }
@@ -30,7 +31,17 @@ final class AppModel {
     var needsOnboarding: Bool { !permissions.accessibility || !onboardingCompleted }
 
     func startIfPermitted() {
-        if permissions.accessibility { registry.start() }
+        if permissions.accessibility { start() }
+    }
+
+    private func start() {
+        registry.start()
+        drag.start()
+    }
+
+    func stopAll() {
+        drag.stop()
+        registry.stop()
     }
 
     func showOnboarding() { onboarding.show() }
