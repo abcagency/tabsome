@@ -30,6 +30,24 @@ enum WindowEvent: Sendable, Equatable {
     case accessibilityDisabled
 }
 
+/// Something Tabsome does to another app's window (PLAN.md §6.1 S1: window level only).
+enum WindowCommand: Sendable, Equatable {
+    /// Size → position → size (PLAN.md §5.4).
+    case setFrame(CGRect)
+    case setPosition(CGPoint)
+    case raise
+    /// Presses the window's own close button, so the app can ask to save.
+    case close
+    case setMinimized(Bool)
+}
+
+/// What came back from a command. `frame` is the window's frame read back afterwards (apps
+/// like Terminal round what they're given), or nil if it couldn't be read.
+struct CommandResult: Sendable, Equatable {
+    let ok: Bool
+    let frame: CGRect?
+}
+
 /// The registry's view of the window system (PLAN.md §4). The live implementation is
 /// `AXWindowSystem`; tests use a fake.
 @MainActor
@@ -40,6 +58,8 @@ protocol WindowSystem: AnyObject {
     func untrack(pid: pid_t)
     func untrackAll()
     var onEvent: ((WindowEvent) -> Void)? { get set }
+    /// Runs on the window's app thread; `completion` comes back on the main actor.
+    func perform(_ command: WindowCommand, window: CGWindowID, pid: pid_t, completion: (@MainActor (CommandResult) -> Void)?)
 }
 
 /// Live implementation: one `AXApp` (with its own thread) per tracked app.
@@ -68,4 +88,19 @@ final class AXWindowSystem: WindowSystem {
     }
 
     var trackedCount: Int { apps.count }
+
+    func perform(_ command: WindowCommand, window: CGWindowID, pid: pid_t, completion: (@MainActor (CommandResult) -> Void)?) {
+        guard let app = apps[pid] else {
+            completion?(CommandResult(ok: false, frame: nil))
+            return
+        }
+        app.perform(command, window: window) { result in
+            // Through the main run loop in common modes, not the main dispatch queue: Quit waits
+            // for these inside a nested run loop, possibly while the main queue is busy (§5.12).
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                MainActor.assumeIsolated { completion?(result) }
+            }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
+        }
+    }
 }

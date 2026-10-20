@@ -26,6 +26,12 @@ final class WindowRegistry {
 
     /// Called when AX reports the API disabled (permission revoked mid-session).
     @ObservationIgnored var onAccessibilityDisabled: (() -> Void)?
+    /// A window's snapshot changed (or appeared, when `old` is nil).
+    @ObservationIgnored var onWindowUpdated: ((_ old: Entry?, _ new: Entry) -> Void)?
+    /// A window is gone: closed, or its app quit.
+    @ObservationIgnored var onWindowRemoved: ((_ id: CGWindowID, _ pid: pid_t) -> Void)?
+    /// An app's main/focused window changed.
+    @ObservationIgnored var onMainWindowChanged: ((_ pid: pid_t, _ id: CGWindowID?) -> Void)?
 
     @ObservationIgnored private let system: WindowSystem
     @ObservationIgnored private var workspaceObservers: [NSObjectProtocol] = []
@@ -87,7 +93,9 @@ final class WindowRegistry {
     func untrack(pid: pid_t) {
         guard apps.removeValue(forKey: pid) != nil else { return }
         system.untrack(pid: pid)
+        let gone = windows.values.filter { $0.app.pid == pid }.map(\.id)
         windows = windows.filter { $0.value.app.pid != pid }
+        for id in gone { onWindowRemoved?(id, pid) }
         mainWindow[pid] = nil
         unresponsive.remove(pid)
     }
@@ -98,18 +106,31 @@ final class WindowRegistry {
         switch event {
         case .appWindows(let pid, let snapshots):
             guard let app = apps[pid] else { return }
-            windows = windows.filter { $0.value.app.pid != pid }
-            for s in snapshots { windows[s.id] = Entry(window: s, app: app) }
+            let ids = Set(snapshots.map(\.id))
+            let gone = windows.values.filter { $0.app.pid == pid && !ids.contains($0.id) }.map(\.id)
+            for id in gone { windows[id] = nil }
+            for s in snapshots {
+                let old = windows[s.id]
+                let new = Entry(window: s, app: app)
+                windows[s.id] = new
+                if old != new { onWindowUpdated?(old, new) }
+            }
             if let main = snapshots.first(where: \.isMain) { mainWindow[pid] = main.id }
+            for id in gone { onWindowRemoved?(id, pid) }
         case .windowUpdated(let s):
             guard let app = apps[s.pid] else { return }
-            windows[s.id] = Entry(window: s, app: app)
+            let old = windows[s.id]
+            let new = Entry(window: s, app: app)
+            windows[s.id] = new
+            if old != new { onWindowUpdated?(old, new) }
         case .windowDestroyed(let pid, let id):
-            windows[id] = nil
+            guard windows.removeValue(forKey: id) != nil else { return }
             if mainWindow[pid] == id { mainWindow[pid] = nil }
+            onWindowRemoved?(id, pid)
         case .mainWindowChanged(let pid, let id):
             guard apps[pid] != nil else { return }
             mainWindow[pid] = id
+            onMainWindowChanged?(pid, id)
         case .appResponsiveness(let pid, let responsive):
             if responsive { unresponsive.remove(pid) } else { unresponsive.insert(pid) }
             FileLog.shared.write("pid \(pid) responsive=\(responsive)")

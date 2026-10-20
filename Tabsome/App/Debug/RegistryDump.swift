@@ -59,7 +59,14 @@ enum RegistryDump {
 
     /// `-TabsomeDebugDumpAfter <seconds>` writes the dump once the registry has settled;
     /// add `-TabsomeDebugQuitAfterDump YES` to quit afterwards (used for scripted checks).
+    private static var quitObserver: NSObjectProtocol?
+
     static func handleLaunchArguments(_ model: AppModel) {
+        // Scripted checks can ask for a real Quit (applicationShouldTerminate and all).
+        quitObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.quit"), object: nil, queue: .main) { _ in
+            // Like a menu click: from the run loop, not from inside a main-queue block.
+            RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        }
         let defaults = UserDefaults.standard
         let delay = defaults.double(forKey: "TabsomeDebugDumpAfter")
         guard delay > 0 else { return }

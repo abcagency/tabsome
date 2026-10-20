@@ -19,6 +19,19 @@ final class OverlayPanel: NSPanel {
         collectionBehavior = [.managed, .fullScreenNone, .ignoresCycle]
     }
 
+    /// Puts `view` inside a plain container that fills the panel. The panel's frame always comes
+    /// from Tabsome (a group, a target window), never from SwiftUI: a hosting view that is the
+    /// content view resizes its window to the view's ideal size (zero for views that fill what
+    /// they're given).
+    func setHostedContent(_ view: NSView) {
+        let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        container.autoresizesSubviews = true
+        view.frame = container.bounds
+        view.autoresizingMask = [.width, .height]
+        container.addSubview(view)
+        contentView = container
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }

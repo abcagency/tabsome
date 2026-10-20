@@ -27,6 +27,8 @@ let spikes: [String: @MainActor (ArraySlice<String>) -> Void] = [
     "drag-dest": S9.run,
     "shot": Shot.run,
     "tabdrag": TabDrag.run,
+    "mouse": Mouse.run,
+    "buttons": Buttons.run,
 ]
 
 let args = Array(CommandLine.arguments.dropFirst())

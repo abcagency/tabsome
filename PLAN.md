@@ -661,6 +661,26 @@ Notes for later phases:
 
 **Demo:** the headline feature works end to end for two windows from different apps. Tearing one out leaves two normal windows with no strip.
 
+#### Phase 3 status (2026-10-20): done
+Built in `Core/Groups/` (`TabGroup`, `GroupManager`, `GroupGeometry`, `ExpectedFrames`) and `UI/Overlays/` (`TabBarWindow`, `TabStripView`, `WindowControlsView`, `StripLayout`, `WindowProxy`). Window commands (set frame, set position, raise, close, minimize) run on each app's AX thread and report the frame the window actually took. Verified:
+- **By hand:** merge, switching, hover, moving the group (title bar and empty strip area), resize, yellow minimize/restore, green Fill/return, red with its confirmation, tear-out, ⌘Tab focus sync, and Quit all worked.
+- **Synthesized, against the real app:** merge (strip 1000×32 directly above the active window), clicking a tab raises that window with the strip above it, middle-click closes the tab's window and dissolves the group (the last window grows back to the outer frame), tear-out leaves the window at the drop point at the group's size, and Quit restored 3 windows (active keeps the outer frame, the others cascade 22 pt) and exited in 0.41 s, with nothing closed.
+- **Window buttons follow the system:** under the Graphite accent all three are grey, as on real windows. The greys were measured on this Mac (Dark: focused #939495 vs. Finder's #949596, unfocused #535353 vs. #555555; Light from AppKit's own buttons). They update live when the accent changes.
+- 74 unit tests in total: `TabGroup` browser rules, `StripLayout` for both placements, frame reconciliation for snapping apps, Fill/return, the quit cascade, expected-frame filtering (P5), the button colors, and `GroupManager` end to end against a fake window system (merge, switch, close → right neighbor, dissolve, tear-out, own moves ignored, follow the active window, full screen leaves, minimize parks, quit closes nothing).
+
+Bugs found by testing the real app and fixed:
+- **Strip frame collapsed to 0×0** a moment after placement: a SwiftUI hosting view as a panel's content view resizes its window to the view's ideal size. Overlay panels now host SwiftUI inside a plain container (`OverlayPanel.setHostedContent`).
+- **Quit could hang:** when Quit was triggered from a main-queue block, AX completions and the 2-second cap, both delivered through the main dispatch queue, never ran inside Quit's nested run loop. They now go through the main run loop in common modes, and the cap is a run-loop timer.
+
+Also built here, ahead of Phase 4: activating an inactive tab's app (⌘Tab, a click) counts as a tab switch, a member entering full screen leaves its group, and a window can be dropped onto an existing group to add a tab. Without the first two, stacked tabs would break as soon as you clicked around.
+
+Deviations and notes for later phases:
+- On Quit, windows move into the cascade instantly; animating them needs one proxy per window (Phase 6 motion pass).
+- Fill and return are instant; preset animation through proxies comes with the Move & Resize flyout (Phase 4).
+- Small notches can show where the strip's square bottom corners meet the window's rounded top corners (Phase 6 polish).
+- Grouped windows can't yet be dropped onto another group (Phase 4: merge a group into a group).
+- Synthesized checks activate other apps' windows, so they can catch the user's keystrokes; run them only while hands are off the keyboard (it happened once, harmlessly, with a scratch file).
+
 ### Phase 4 — Unlimited tabs and full tab interactions
 - Add to an existing group, and merge a group into a group.
 - Reorder, and drop a tab or window onto another group's **tab strip** at a chosen position, with no pause and an insertion marker (§5.2).

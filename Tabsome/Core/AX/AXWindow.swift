@@ -126,7 +126,7 @@ nonisolated final class AXWindow {
         return CFBooleanGetValue((value as! CFBoolean))
     }
 
-    private func setPosition(_ p: CGPoint) -> Bool {
+    func setPosition(_ p: CGPoint) -> Bool {
         var p = p
         guard let v = AXValueCreate(.cgPoint, &p) else { return false }
         return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, v) == .success

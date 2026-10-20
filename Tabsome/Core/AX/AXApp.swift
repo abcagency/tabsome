@@ -44,6 +44,26 @@ nonisolated final class AXApp: @unchecked Sendable {
         }
     }
 
+    // MARK: Commands
+
+    /// Runs a window command on this app's thread (never the main thread, P1).
+    func perform(_ command: WindowCommand, window id: CGWindowID, done: @escaping @Sendable (CommandResult) -> Void) {
+        thread.perform {
+            guard !self.stopped, !self.unresponsive, let window = self.windows.values.first(where: { $0.id == id }) else {
+                return done(CommandResult(ok: false, frame: nil))
+            }
+            let ok: Bool = switch command {
+            case .setFrame(let frame): window.setFrame(frame)
+            case .setPosition(let point): window.setPosition(point)
+            case .raise: window.raise()
+            case .close: window.pressClose()
+            case .setMinimized(let minimized): window.setMinimized(minimized)
+            }
+            let frame: CGRect? = if case .success(let s) = window.snapshot() { s.frame } else { nil }
+            done(CommandResult(ok: ok, frame: frame))
+        }
+    }
+
     // MARK: Setup
 
     private func setUp() {

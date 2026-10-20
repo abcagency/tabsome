@@ -20,8 +20,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
+    /// Untab everything, close nothing (PLAN.md §5.12): reply later, once every window is back,
+    /// or after 2 s so a hung app can't stop Tabsome from quitting.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isRunningTests, !model.groups.groups.isEmpty else { return .terminateNow }
+        model.restoreAndStop {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        // Phase 3 adds "untab everything, close nothing" here (PLAN.md §5.12).
         model.stopAll()
         FileLog.shared.write("quit")
         FileLog.shared.flush()

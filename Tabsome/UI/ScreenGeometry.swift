@@ -10,6 +10,10 @@ enum ScreenGeometry {
         CGPoint(x: p.x, y: primaryHeight - p.y)
     }
 
+    static func cgRect(fromAppKit r: NSRect) -> CGRect {
+        CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+    }
+
     static func appKitRect(fromCG r: CGRect) -> NSRect {
         NSRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
     }

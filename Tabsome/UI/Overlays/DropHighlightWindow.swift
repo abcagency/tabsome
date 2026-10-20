@@ -15,7 +15,9 @@ final class DropHighlightWindow {
     private static let margin: CGFloat = 12
 
     init() {
-        panel.contentView = NSHostingView(rootView: DropHighlightView(model: model))
+        let host = NSHostingView(rootView: DropHighlightView(model: model))
+        host.sizingOptions = []
+        panel.setHostedContent(host)
     }
 
     func show(targetFrame: CGRect, above target: CGWindowID, tabs: [GhostTab]) {

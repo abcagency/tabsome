@@ -12,6 +12,19 @@ final class FakeWindowSystem: WindowSystem {
     func untrackAll() { tracked.removeAll(); untrackAllCount += 1 }
 
     func send(_ event: WindowEvent) { onEvent?(event) }
+
+    /// Every command, in order. Frames "land" exactly unless `landing` says otherwise.
+    private(set) var commands: [(WindowCommand, CGWindowID)] = []
+    var landing: [CGWindowID: (CGRect) -> CGRect] = [:]
+
+    func perform(_ command: WindowCommand, window: CGWindowID, pid: pid_t, completion: (@MainActor (CommandResult) -> Void)?) {
+        commands.append((command, window))
+        var frame: CGRect?
+        if case .setFrame(let f) = command { frame = landing[window]?(f) ?? f }
+        completion?(CommandResult(ok: true, frame: frame))
+    }
+
+    func clearCommands() { commands.removeAll() }
 }
 
 func snapshot(_ id: CGWindowID, pid: pid_t, title: String? = "Doc", frame: CGRect = CGRect(x: 10, y: 20, width: 300, height: 200),

@@ -59,10 +59,15 @@ enum TabDrag {
         try? await Task.sleep(for: .seconds(0.83 + hold - 0.15))
         await shoot(region: targetFrame.insetBy(dx: -30, dy: -60), name: "tabdrag-armed")
         log(String(format: "armed shot at %.2f s", ProcessInfo.processInfo.systemUptime - t0))
-        if !releaseInZone {
-            try? await Task.sleep(for: .seconds(0.15 + 0.3 + 0.45))
-            await shoot(region: targetFrame.insetBy(dx: -30, dy: -60), name: "tabdrag-away")
+        if releaseInZone {
+            // Leave the windows alone: they're a group now.
+            try? await Task.sleep(for: .seconds(1.6))
+            await shoot(region: targetFrame.insetBy(dx: -30, dy: -60), name: "tabdrag-merged")
+            log("target frame \(targetFrame)")
+            return
         }
+        try? await Task.sleep(for: .seconds(0.15 + 0.3 + 0.45))
+        await shoot(region: targetFrame.insetBy(dx: -30, dy: -60), name: "tabdrag-away")
         try? await Task.sleep(for: .seconds(1.0))
         axSetFrame(d, dOrig); axSetFrame(t, tOrig)
     }
