@@ -740,6 +740,27 @@ Also fixed: ending a title-bar drag no longer re-sends the active window's frame
 
 128 unit tests in total. The new ones cover tile detection, with and without margins, and check that a group's own frame never reads as a tile. They also test the re-fit itself.
 
+**4d (2026-10-23): done. Phase 4 is complete.** Checked by hand in Top and in both Left styles:
+- **Spring-loaded tabs (§5.14).** A drag from any app over a background tab switches to it after the system's spring-loading delay (0.5 s here), with a blink just before. The drop lands in the window underneath. If spring-loading is off in System Settings, so is this.
+- **Hover previews (§5.14).** Hovering a background tab for 0.6 s opens a glass popover with a live picture of that window, streamed at about 5 fps. Once one is open, moving to another background tab swaps it instantly. A click closes it until the pointer moves to another tab, and leaving the strip resets it. The stream runs only while the popover is open. Without Screen Recording, the popover shows the app's icon instead.
+- Background tabs skip their tooltip while previews are on.
+- Settings › Tabs has a new switch, "Show previews when hovering tabs" (on by default).
+
+Found and fixed:
+- **The Settings window scrolled after switching panes.** Its grouped forms have no fixed height. Each pane is now held to its content height with scrolling off, so the window fits each pane, like the system's Settings windows.
+- **A first fix for that crashed on opening Settings.** It measured each pane's height and set it, which became a layout feedback loop that AppKit aborts. The fix that shipped stores nothing.
+- **Debug builds** gained the `com.tabsome.debug.settings` notification, which opens Settings for scripted layout checks.
+
+147 unit tests in total. The new ones cover:
+- spring-loading timing: the system delay, the blink, a reset when the drag moves to another tab, and the off setting
+- the preview timer: the delay, instant swaps, clicks, and leaving the strip
+- popover placement in both placements, kept on screen
+- the capture stream stopping when a preview closes or swaps
+- frames from a previous tab being ignored
+- the icon card when Screen Recording is missing
+
+Not done: app badges on tabs (§5.14) belong to a later phase.
+
 ### Phase 5 — Robustness
 - Corner-parking fallback for misfit windows.
 - Full screen, minimize, Spaces, multiple displays.

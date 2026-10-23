@@ -79,4 +79,16 @@ enum RegistryDump {
         }
     }
 }
+/// Scripted checks can open the Settings window (to check its layout) without clicking the
+/// menu: `openSettings` only works from a SwiftUI view, and the menu bar icon's is always alive.
+struct DebugSettingsHook: ViewModifier {
+    @Environment(\.openSettings) private var openSettings
+
+    func body(content: Content) -> some View {
+        content.onReceive(DistributedNotificationCenter.default().publisher(for: .init("com.tabsome.debug.settings"))) { _ in
+            NSApp.activate()
+            openSettings()
+        }
+    }
+}
 #endif

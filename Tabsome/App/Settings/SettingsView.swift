@@ -21,6 +21,17 @@ struct SettingsView: View {
     }
 }
 
+/// Settings panes never scroll and the window isn't resizable: like the system's own Settings
+/// windows, it takes each pane's full height, resizing as you switch tabs. A grouped Form
+/// scrolls and would fill whatever height it's given, so it's held to its ideal (content)
+/// height instead. No measuring and no state, so layout can't feed back into itself (a
+/// measured height crashed the window with a layout loop).
+extension View {
+    func fitsContent() -> some View {
+        scrollDisabled(true).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct GeneralSettingsView: View {
     let model: AppModel
 
@@ -48,6 +59,7 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .fitsContent()
         .onAppear { login.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
     }
@@ -136,6 +148,7 @@ struct AppearanceThumbnail: View {
 /// placements can be used and tested).
 struct TabsSettingsView: View {
     let model: AppModel
+    @AppStorage(HoverPreview.settingKey) private var showsPreviews = true
 
     var body: some View {
         @Bindable var model = model
@@ -160,8 +173,18 @@ struct TabsSettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                Toggle("Show previews when hovering tabs", isOn: $showsPreviews)
+            } footer: {
+                Text(CGPreflightScreenCaptureAccess()
+                     ? "Hover a background tab to see its window."
+                     : "Previews show the app’s icon until Tabsome has Screen & System Audio Recording permission.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
+        .fitsContent()
     }
 }
 

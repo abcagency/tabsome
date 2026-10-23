@@ -223,6 +223,8 @@ private struct StripTab: View {
         .background {
             if tab.isActive {
                 Capsule().fill(.clear).glassEffect(.regular, in: Capsule())
+            } else if model.springFlash == tab.id {
+                Capsule().fill(Color.accentColor.opacity(0.35)) // the blink before a spring-loaded switch
             } else if isSelected {
                 Capsule().fill(Color.accentColor.opacity(0.16))
             } else if hovered {
@@ -237,7 +239,7 @@ private struct StripTab: View {
         .padding(.horizontal, 2)
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
-        .help(tab.title ?? tab.label)
+        .help(model.tooltip(tab, tab.title ?? tab.label))
         // Chrome's order (§5.7). Rename arrives with inline renaming.
         .contextMenu {
             if isSelected {

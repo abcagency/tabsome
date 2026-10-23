@@ -69,6 +69,19 @@ final class TabStripModel {
     var renameDraft = ""
     /// Tabs selected with ⇧/⌘-click (always includes the active one).
     var selection = TabSelection(active: 0)
+    /// The tab blinking just before a spring-loaded switch (§5.14).
+    var springFlash: CGWindowID?
+
+    /// Settings › Tabs › "Show previews when hovering tabs" (§5.14). With previews on, background
+    /// tabs skip the tooltip, which would cover the preview.
+    var showsPreviews: Bool { UserDefaults.standard.object(forKey: HoverPreview.settingKey) as? Bool ?? true }
+    func tooltip(_ tab: TabItem, _ text: String) -> String { showsPreviews && !tab.isActive ? "" : text }
+
+    /// The background tab at a point in strip coordinates, if any (the active tab doesn't count).
+    func backgroundTab(at p: CGPoint, size: CGSize) -> CGWindowID? {
+        guard let i = layout(size: size).tab(at: along(p)), tabs.indices.contains(i), !tabs[i].isActive else { return nil }
+        return tabs[i].id
+    }
 
     var order: [CGWindowID] { tabs.map(\.id) }
     var activeID: CGWindowID { tabs.first(where: \.isActive)?.id ?? 0 }
@@ -156,6 +169,12 @@ final class TabBarWindow {
     private let actions: StripActions
     /// Left mode's rename field, attached to the right of the icon (§5.10).
     private var renamePanel: OverlayPanel?
+    /// Hover previews of background tabs (§5.14).
+    private let preview = HoverPreview()
+    private var previewTimer = HoverPreviewTimer()
+    private var previewFire: Timer?
+    /// The members' frame, for the preview's shape.
+    private var contentSize = CGSize.zero
 
     var placement: TabPlacement = .top {
         didSet { model.placement = placement }
@@ -163,7 +182,8 @@ final class TabBarWindow {
 
     init(actions: StripActions) {
         self.actions = actions
-        panel.setHostedContent(StripHostingView(model: model, actions: actions))
+        let host = StripHostingView(model: model, actions: actions)
+        panel.setHostedContent(host)
         let back = NSHostingView(rootView: StripBackground(model: model))
         back.sizingOptions = []
         backPanel.setHostedContent(back)
@@ -171,6 +191,52 @@ final class TabBarWindow {
         model.onRename = { id, name, refocus in actions.rename(id, name, refocus) }
         model.onCancelRename = { id in actions.cancelRename(id) }
         resignObservers.append(saveRenameOnResignKey(panel))
+        host.onPointer = { [weak self] in self?.pointerChanged() }
+        host.onPress = { [weak self] point in self?.pressed(at: point) }
+    }
+
+    // MARK: Hover previews (§5.14)
+
+    private func pointerChanged() {
+        let strip = panel.frame.size
+        if model.showsPreviews, model.renaming == nil, model.visible, !dismissing, let p = model.hover {
+            previewTimer.pointer(tab: model.backgroundTab(at: p, size: strip), inStrip: true, now: ProcessInfo.processInfo.systemUptime)
+        } else {
+            previewTimer.cancel()
+        }
+        applyPreview()
+    }
+
+    private func pressed(at point: CGPoint) {
+        previewTimer.click(on: model.backgroundTab(at: point, size: panel.frame.size))
+        applyPreview()
+    }
+
+    private func cancelPreview() {
+        previewTimer.cancel()
+        applyPreview()
+    }
+
+    private func applyPreview() {
+        previewFire?.invalidate()
+        previewFire = nil
+        if let deadline = previewTimer.deadline {
+            previewFire = Timer.scheduledTimer(withTimeInterval: max(0, deadline - ProcessInfo.processInfo.systemUptime), repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.previewTimer.tick(now: ProcessInfo.processInfo.systemUptime)
+                    self.applyPreview()
+                }
+            }
+        }
+        guard let id = previewTimer.shown, let index = model.tabs.firstIndex(where: { $0.id == id }) else { return preview.hide() }
+        let strip = ScreenGeometry.cgRect(fromAppKit: panel.frame)
+        let layout = model.layout(size: strip.size)
+        guard let slot = layout.visible.firstIndex(of: index) else { return preview.hide() }
+        let tab = layout.frames[slot].offsetBy(dx: strip.minX, dy: strip.minY)
+        let screen = (panel.screen ?? NSScreen.main).map { ScreenGeometry.cgRect(fromAppKit: $0.visibleFrame) } ?? strip
+        let frame = PreviewGeometry.frame(tab: tab, placement: placement, windowSize: contentSize, screen: screen)
+        preview.show(model.tabs[index], frame: frame, windowSize: contentSize)
     }
 
     private var resignObservers: [NSObjectProtocol] = []
@@ -183,6 +249,7 @@ final class TabBarWindow {
     }
 
     private func renamingChanged(_ editing: Bool) {
+        if editing { cancelPreview() }
         // Top and Left-with-names edit in place; compact Left pops a field out beside the icon.
         if placement != .left {
             panel.allowsKey = editing
@@ -220,6 +287,8 @@ final class TabBarWindow {
             model.selection.prune(to: model.order, active: model.activeID)
         }
         if model.focused != focused { model.focused = focused }
+        // A tab that just became active has no preview; a new title shows in an open one.
+        if previewTimer.state != .idle { pointerChanged() }
     }
 
     /// Where a drop at this global point would insert, if the point is over the tabs.
@@ -243,6 +312,7 @@ final class TabBarWindow {
 
     /// Frame only (live following during a drag).
     func follow(content: CGRect) {
+        contentSize = content.size
         let strip = StripLayout.frames(outer: StripLayout.outer(content: content, placement: placement), placement: placement).strip
         panel.setFrame(ScreenGeometry.appKitRect(fromCG: strip), display: true)
         backPanel.setFrame(ScreenGeometry.appKitRect(fromCG: StripLayout.panelFrame(strip: strip, placement: placement)), display: true)
@@ -286,6 +356,7 @@ final class TabBarWindow {
     }
 
     func hide() {
+        cancelPreview()
         withAnimation(Motion.smooth) { model.visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             MainActor.assumeIsolated {
@@ -302,6 +373,7 @@ final class TabBarWindow {
         burst?.invalidate()
         burst = nil
         renamePanel?.orderOut(nil)
+        cancelPreview()
         withAnimation(Motion.smooth) { model.visible = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [panel, backPanel] in
             MainActor.assumeIsolated {
@@ -313,11 +385,17 @@ final class TabBarWindow {
 }
 
 /// Hosts the SwiftUI strip. Takes the first click without activating anything (the panel is
-/// non-activating), tracks the pointer even though Tabsome is never the active app, and turns
-/// a middle-click on a tab into Close Tab (§5.7).
+/// non-activating), tracks the pointer even though Tabsome is never the active app, turns
+/// a middle-click on a tab into Close Tab (§5.7), and spring-loads tabs for drags from any app
+/// (§5.14).
 private final class StripHostingView: NSHostingView<StripRootView> {
     private let model: TabStripModel
     private let actions: StripActions
+    /// The pointer moved, entered, or left (`model.hover` is up to date).
+    var onPointer: (() -> Void)?
+    /// Any mouse button went down at this point (strip coordinates).
+    var onPress: ((CGPoint) -> Void)?
+    private var spring = SpringLoader.system()
 
     init(model: TabStripModel, actions: StripActions) {
         self.model = model
@@ -344,17 +422,87 @@ private final class StripHostingView: NSHostingView<StripRootView> {
         return isFlipped ? p : CGPoint(x: p.x, y: bounds.height - p.y)
     }
 
-    override func mouseMoved(with event: NSEvent) { model.hover = flipped(event) }
+    override func mouseMoved(with event: NSEvent) {
+        model.hover = flipped(event)
+        onPointer?()
+    }
 
     override func mouseEntered(with event: NSEvent) {
         model.hover = flipped(event)
         model.addCandidates = actions.addCandidates()
+        onPointer?()
     }
 
     /// Leaving the strip ends the width freeze: tabs reflow (§5.6).
     override func mouseExited(with event: NSEvent) {
         model.hover = nil
         if model.frozenWidth != nil { withAnimation(Motion.smooth) { model.frozenWidth = nil } }
+        onPointer?()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onPress?(flipped(event))
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onPress?(flipped(event))
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        onPress?(flipped(event))
+        super.otherMouseDown(with: event)
+    }
+
+    // MARK: Spring-loaded tabs (§5.14)
+
+    /// Registered again whenever the view joins a window, in case SwiftUI resets the list.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerForDraggedTypes(NSPasteboard.PasteboardType.springLoadingTypes)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        spring = SpringLoader.system() // the setting may have changed since the last drag
+        springUpdate(sender)
+        return []
+    }
+
+    /// Never accepts the drop (no operation), so the item lands in the window below (Phase 0).
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        springUpdate(sender)
+        return []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) { springEnded() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { springEnded() }
+    override func wantsPeriodicDraggingUpdates() -> Bool { true }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { false }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool { false }
+
+    private func springUpdate(_ sender: NSDraggingInfo) {
+        guard model.visible else { return }
+        let p = convert(sender.draggingLocation, from: nil)
+        let point = isFlipped ? p : CGPoint(x: p.x, y: bounds.height - p.y)
+        model.hover = point // the tab under the item highlights, as on hover
+        apply(spring.update(tab: model.backgroundTab(at: point, size: bounds.size), now: ProcessInfo.processInfo.systemUptime))
+    }
+
+    private func springEnded() {
+        apply(spring.reset())
+        model.hover = nil
+    }
+
+    private func apply(_ effect: SpringLoader.Effect?) {
+        switch effect {
+        case .blink(let id): withAnimation(Motion.quickFade) { model.springFlash = id }
+        case .endBlink: withAnimation(Motion.quickFade) { model.springFlash = nil }
+        case .activate(let id):
+            model.springFlash = nil
+            actions.activate(id)
+        case nil: break
+        }
     }
 
     override func otherMouseUp(with event: NSEvent) {

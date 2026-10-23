@@ -164,6 +164,8 @@ private struct LeftTab: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.clear)
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .padding(3)
+            } else if model.springFlash == tab.id {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.35)).padding(3)
             } else if hovered {
                 RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.06)).padding(3)
             }
@@ -195,7 +197,7 @@ private struct LeftTab: View {
         }
         .animation(Motion.quickFade, value: hovered)
         .contentShape(Rectangle())
-        .help(tab.title.map { "\(tab.label)\n\($0)" } ?? tab.label)
+        .help(model.tooltip(tab, tab.title.map { "\(tab.label)\n\($0)" } ?? tab.label))
     }
 }
 
@@ -238,6 +240,8 @@ private struct NamedLeftTab: View {
             let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
             if tab.isActive {
                 shape.fill(.clear).glassEffect(.regular, in: shape)
+            } else if model.springFlash == tab.id {
+                shape.fill(Color.accentColor.opacity(0.35))
             } else if isSelected {
                 shape.fill(Color.accentColor.opacity(0.16))
             } else if hovered {
@@ -251,7 +255,7 @@ private struct NamedLeftTab: View {
         }
         .animation(Motion.quickFade, value: hovered)
         .contentShape(Rectangle())
-        .help(tab.title.map { "\(tab.label)\n\($0)" } ?? tab.label)
+        .help(model.tooltip(tab, tab.title.map { "\(tab.label)\n\($0)" } ?? tab.label))
     }
 }
 

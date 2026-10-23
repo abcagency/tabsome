@@ -33,6 +33,9 @@ struct MenuBarLabel: View {
     var body: some View {
         Image(nsImage: MenuBarIconImage.image(badged: !permissions.accessibility))
             .accessibilityLabel(permissions.accessibility ? Brand.name : "\(Brand.name), Accessibility permission needed")
+            #if DEBUG
+            .modifier(DebugSettingsHook())
+            #endif
     }
 }
 
