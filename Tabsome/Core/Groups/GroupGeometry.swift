@@ -20,6 +20,20 @@ nonisolated enum GroupGeometry {
         return (visibleFrame, outer)
     }
 
+    /// PLAN.md §5.8: macOS tiled the window (its green-button menu, Window › Move & Resize, the
+    /// fn-⌃ arrow keys, or an edge drag): on each axis it spans the whole usable area or one half
+    /// of it. The tolerance absorbs "Tiled windows have margins" and apps that round their frame,
+    /// and stays below the strip's thickness, so a group's own content frame (inset by the strip)
+    /// never reads as a tile.
+    static func isTile(_ frame: CGRect, visibleFrame v: CGRect, tolerance: CGFloat = 20) -> Bool {
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) <= tolerance }
+        func spans(_ lo: CGFloat, _ hi: CGFloat, _ vLo: CGFloat, _ vHi: CGFloat) -> Bool {
+            let mid = (vLo + vHi) / 2
+            return (near(lo, vLo) && near(hi, vHi)) || (near(lo, vLo) && near(hi, mid)) || (near(lo, mid) && near(hi, vHi))
+        }
+        return spans(frame.minX, frame.maxX, v.minX, v.maxX) && spans(frame.minY, frame.maxY, v.minY, v.maxY)
+    }
+
     /// Where a group's members go when it's undone on quit (PLAN.md §5.12): the active tab keeps
     /// the outer frame (its strip space given back) and stays on top; each other tab is cascaded
     /// 22 pt right and down from the one before, wrapping to the start if it would leave the

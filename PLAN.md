@@ -39,7 +39,7 @@ Everyone already knows how tabs work in Safari and Chrome. Tabsome should need *
 | Hover a background tab to see a preview (Safari) | Same (§5.14) |
 | Drag a file over a tab and it switches to that tab (Safari, Finder spring-loading) | Same (§5.14) |
 | A favicon shows unread counts | The app's Dock badge shows on its tab (§5.14) |
-| Safari/Chrome put the red, yellow, and green window buttons **in the tab bar, left of the tabs**, and they act on the whole window | Same in Top mode: **close all tabs, minimize the group to the Dock, and fill the screen**. Hovering green opens the macOS-style **Move & Resize** flyout for the group (§5.11) |
+| Safari/Chrome put the red, yellow, and green window buttons **in the tab bar, left of the tabs**, and they act on the whole window | Same in Top mode: **close all tabs, minimize the group to the Dock, and fill the screen** (click green again to go back). macOS's own tiling works on a group too: the group re-fits to the tile (§5.8, §5.11) |
 | Active tab looks attached to the page; background tabs look recessed | Same: the active tab blends into the window below it, and the others are dimmer |
 | "+" opens a new tab | The **"+" button** opens a menu of your other open windows; pick one to add it as a tab. It's the click alternative to dragging, and it makes the feature discoverable |
 | Double-click empty space in the tab bar | Does what double-clicking a title bar does on this Mac (zoom or minimize, per System Settings) |
@@ -47,7 +47,7 @@ Everyone already knows how tabs work in Safari and Chrome. Tabsome should need *
 The one deliberate difference: **renaming** (double-click a tab). Browsers don't have it, but it's the same gesture as renaming in Finder.
 
 Inside a group, then:
-- **Window buttons** (Top mode): the usual red, yellow, and green buttons sit at the left end of the tab strip and act on the **whole group**. Red closes all tabs, yellow minimizes the group to the Dock, and green fills the screen. Hover green for the Move & Resize flyout (§5.11).
+- **Window buttons** (Top mode): the usual red, yellow, and green buttons sit at the left end of the tab strip and act on the **whole group**. Red closes all tabs, yellow minimizes the group to the Dock, and green fills the screen (click again to go back). To tile a group, use macOS's own tiling on its window; the group re-fits to the tile (§5.8, §5.11).
 - **Click a tab** to switch to that window. **×** or middle-click closes it.
 - **Rename a tab inline**: double-click it and type. By default a tab is named after its app; a custom name replaces that until you clear it.
 - **Tear a tab out**: drag it away from the strip to make it a normal, separate window again.
@@ -92,7 +92,7 @@ Consequences that shape the whole design:
 | Language | Swift 6 (strict concurrency). The registry and UI are `@MainActor`; AX calls run on one thread per app and never on the main thread (§6.2 P1), delivering plain-value events to the main actor |
 | UI | **AppKit** for overlay windows (precise control over level, ordering, and click-through); **SwiftUI** for the tab strip contents, menu bar menu, Settings, and onboarding |
 | Minimum macOS | **26 Tahoe**. One visual style, Liquid Glass, matching current macOS exactly, with the SwiftUI `glassEffect` APIs, `MenuBarExtra`, `SMAppService`, and current ScreenCaptureKit available without fallbacks |
-| Look | **Liquid Glass** throughout (§5.15): the tab strip, flyout, highlight, and menus use the system glass materials, not custom imitations |
+| Look | **Liquid Glass** throughout (§5.15): the tab strip, highlight, and menus use the system glass materials, not custom imitations |
 | Window control | `ApplicationServices` AX API (`AXUIElement`, `AXObserver`) |
 | Window discovery / z-order | `CGWindowListCopyWindowInfo`; `CGWindowListCreateDescriptionFromArray` for one window's live bounds during a drag (§5.6) |
 | Mouse tracking | `NSEvent.addGlobalMonitorForEvents` (left mouse down/dragged/up) |
@@ -144,7 +144,7 @@ Tabsome.app  (LSUIElement menu bar app)
 │
 ├── Core/Groups/
 │   ├── TabGroup.swift            ordered [WindowRef], activeIndex, frame
-│   ├── LayoutPresets.swift       halves, quarters, fill, center, arrange, margins (pure, tested)
+│   ├── GroupGeometry.swift       fill/return, tile detection, parking, cascade (pure, tested)
 │   ├── TabNaming.swift           label rules: custom name > same-app tiebreaker > app name (pure, tested)
 │   ├── GroupManager.swift        merge, add, remove, reorder, activate, dissolve, move/resize sync
 │   ├── FrameSync.swift           applies the group frame to members (debounced and coalesced)
@@ -159,7 +159,6 @@ Tabsome.app  (LSUIElement menu bar app)
     ├── TabDragController.swift   tab drag: reorder, tear-off, and drop onto another target
     ├── TabRenameField.swift      inline rename field (in-tab for Top, attached popover for Left)
     ├── WindowControlsView.swift  group red/yellow/green buttons, drawn to match macOS (§5.11)
-    ├── ArrangeFlyout.swift       Move & Resize flyout replica shown from the green button
     ├── HoverPreview.swift        background-tab preview popover and its one-window capture stream (§5.14)
     ├── SpringLoading.swift       drag-destination handling on the strip that switches tabs mid-drag (§5.14)
     ├── Metrics.swift             every size, spacing, and radius, measured from current macOS (§5.15)
@@ -303,7 +302,7 @@ Every row matches Safari/Chrome unless it says otherwise (§1, "works like brows
 | Event | Response |
 |---|---|
 | Active member moved or resized by the user | Update the group frame. Re-sync the other members on mouse up. Move the strip live |
-| Active member tiled by macOS (its own green-button flyout, Window › Move & Resize, the fn-⌃ arrow shortcuts, or edge drag) | The window lands on a screen tile with no room for the strip. Detect a frame that matches a tile of `NSScreen.visibleFrame`, then **re-fit the group so the outer frame (strip plus window) fills that tile**, shrinking the window by the strip's thickness. The result looks the same as using Tabsome's own flyout |
+| Active member tiled by macOS (its own green-button flyout, Window › Move & Resize, the fn-⌃ arrow shortcuts, or edge drag) | The window lands on a screen tile with no room for the strip. Detect a frame that matches a tile of `NSScreen.visibleFrame`, then **re-fit the group so the outer frame (strip plus window) fills that tile**, shrinking the window by the strip's thickness. A frame counts as a tile when each axis spans the whole usable area or one half of it, within 20 pt (enough for "Tiled windows have margins" and apps that round, and less than the strip's thickness, so a group's own frame never reads as a tile). It's checked once the window stops moving, after macOS's tiling animation. The result looks like a tiled ordinary window, which is why there's no group flyout (§5.11) |
 | Member window closed (`kAXUIElementDestroyed`), from the tab's × or from inside the app | Remove the tab. If it was active, activate the **tab to its right** (or left, if it was last), like a browser. If only one tab is left, **dissolve** the group |
 | **Group drops to one window** (tear-out, close, Move Out, app quit) | **Dissolve:** remove the strip panel, un-park the last window if it was corner-parked, grow it back into the strip's space (height in Top mode, width in Left mode), and stop tracking it as a group. It's an ordinary window again and can be dragged into a new group later |
 | Member's app quits or crashes (`NSWorkspace.didTerminateApplication`) | Remove all of that app's tabs |
@@ -350,7 +349,7 @@ Every row matches Safari/Chrome unless it says otherwise (§1, "works like brows
 2. Show the snapshot in a borderless overlay at the window's current frame, and animate the overlay with the spring.
 3. Underneath, move the real window to its final frame with one AX write while it's hidden:
    - **cover:** when the destination is covered by the group's active window (snap-in), activate that window so the real one goes behind it, then move.
-   - **park:** when nothing covers the destination (flyout presets), corner-park the real window during the spring, then move it at the end.
+   - **park:** when nothing covers the destination (layout presets, if a group flyout returns), corner-park the real window during the spring, then move it at the end.
 4. When the real window has landed (within 8 pt and unchanged across two polls, never an exact match), take a **second snapshot at the final size** (ScreenCaptureKit captures covered windows) and cross-fade the proxy's contents to it during the spring. A snapshot stretched to a new size reads as "scaled up" (seen in Phase 0).
 5. Retarget the spring to the frame the window actually took (apps like Terminal round it), then raise the real window and fade the proxy out over 0.1 s.
 
@@ -389,7 +388,7 @@ No separate "animations" setting in Tabsome. We follow the system, like Apple's 
 
 **Motion:** the field fades in with `Motion.quickFade`, and the tab width springs to fit the new name with `Motion.snappy`.
 
-### 5.11 Group window buttons and the Move & Resize flyout
+### 5.11 Group window buttons
 In Top mode, the left end of the tab strip has the three standard macOS window buttons, like Safari's and Chrome's tab bars. They act on the **group**, not one tab.
 
 **Look and behavior (identical to macOS):**
@@ -403,27 +402,8 @@ In Top mode, the left end of the tab strip has the three standard macOS window b
 | 🔴 **Close** | **Close all tabs:** presses the AX close button on every member window | Like Safari, it first asks "Close *N* tabs?" with a "Don't ask again" checkbox (Settings › Tabs, "Ask before closing all tabs", on by default). Apps that need to save show their own prompts. Windows that stay open (the user hit Cancel) stay in the group |
 | 🟡 **Minimize** | **Minimize the group to the Dock as one item** | Only the active window is minimized with the AX minimized attribute, so the Dock gets **one** thumbnail (macOS's genie animation, for free). The other members are corner-parked and the strip is hidden. Clicking that Dock thumbnail (or switching to that app with ⌘Tab) un-minimizes the window. Tabsome sees that and brings back the whole group and strip. The Dock thumbnail shows the active tab's window only; there's no way to give the Dock a combined picture |
 | 🟢 **Maximize** (click) | **Fill the screen:** the group's outer frame fills the screen's usable area (`NSScreen.visibleFrame`, which leaves out the menu bar and Dock). Clicking again **returns to the previous size and position** | ⌥-click does the same. This is "Fill", **not native full screen**: macOS full screen gives each window its own Space, which can't hold a cross-app group |
-| 🟢 **Maximize** (hover about 0.5 s, or click and hold) | Opens the **Move & Resize flyout** (below) | Same timing as macOS |
 
-**The Move & Resize flyout** is a replica of the macOS green-button menu that moves and resizes the **group**. It's our own popover (the system's menu only works on the window that owns it), styled to match the current macOS menu: a Liquid Glass background, small layout tiles, and section headers. Its items and layout follow what the system menu offers on macOS 26+.
-- **Move & Resize:**
-  - Halves: Left, Right, Top, Bottom
-  - Quarters: Top Left, Top Right, Bottom Left, Bottom Right
-- **Fill & Arrange:**
-  - Fill
-  - Center
-  - Arrange with the most recent other window or group:
-    - side by side (left/right)
-    - stacked (top/bottom)
-- **Move to *Display Name***: one item per other display, keeping the same relative size and position.
-- **Return to Previous Size**: shown only after a move or resize from this flyout or the green button.
-- **Full Screen** is left out on purpose (see the Fill note above).
-
-**Matching macOS details:**
-- Every preset applies to the group's **outer** frame (strip plus window), so a left-half group has its strip at the top of the left half. All the math lives in one pure, unit-tested `LayoutPresets` function.
-- Respects System Settings › Desktop & Dock › "Tiled windows have margins": gaps between tiles if it's on, edge to edge if it's off.
-- The group moves with `Motion.snappy` through the proxy technique (§5.9), the same spring as macOS window tiling.
-- Each group remembers its frame from before the last preset, for "Return to Previous Size" and the second green click.
+**No Move & Resize flyout (dropped for now, 2026-10-21).** The plan had a copy of the macOS green-button menu on the group's green button, since the system's own menu only acts on the window that owns it. It's dropped because macOS's tiling already reaches groups: when the active window is tiled, the group re-fits so its outer frame (strip plus window) fills the tile (§5.8). So the window's own green-button menu, Window › Move & Resize, the fn-⌃ arrow keys, and edge drags all tile the whole group, and they keep matching whatever macOS offers. Hovering the group's green button shows its glyph but opens nothing; a click fills and a second click returns. A copy with halves, quarters, other displays, Return to Previous Size, and proxy-animated presets can come back later if it's missed.
 
 **The app windows' own buttons:** each tabbed window still has its own red, yellow, and green buttons in its title bar just below the strip. Apps own those, and Tabsome can't remove or hide them. They keep working, mapped to browser-like meanings:
 - **Red** closes just that tab (like closing one tab).
@@ -471,7 +451,7 @@ A setting in **Settings › General** with three choices, shown as three thumbna
 
 **What it affects:** everything Tabsome draws:
 - tab strips (both placements), the "+" menu, and right-click menus
-- the group window buttons and the Move & Resize flyout
+- the group window buttons
 - the drop highlight, insertion marker, ghost tab, and icon-card proxies
 - the inline rename field
 - the Settings window, onboarding, and the menu bar menu
@@ -518,7 +498,7 @@ Three more behaviors borrowed from Safari, Chrome, and Finder.
 Tabsome targets **macOS 26 and later**, so it has one look: Apple's **Liquid Glass**, matching the system exactly.
 - **The tab strip** uses the system glass material (SwiftUI `glassEffect`), like the toolbars and tab bars in Safari and Finder. It is not a custom imitation of glass.
 - **The active tab** uses the selected-tab treatment from current Safari: a raised glass capsule. Background tabs sit flat on the strip.
-- **Popovers and menus** (the "+" menu, Move & Resize flyout, hover previews, rename field in Left mode, right-click menus) use the standard system popover and menu styles, so they match whatever the system draws.
+- **Popovers and menus** (the "+" menu, hover previews, rename field in Left mode, right-click menus) use the standard system popover and menu styles, so they match whatever the system draws.
 - **The drop highlight and insertion marker** use glass with the system accent color, like the window-tiling preview.
 - **Size and spacing** (strip height, corner radii, button size and inset, padding) are measured from real Safari and Finder windows on the running macOS in Phase 0. They are not guessed. They live in one `Metrics.swift` file so a future macOS update means one file to adjust.
 - Respects the user's accent color, Appearance setting (§5.13), Reduce Transparency, and Increase Contrast; the glass APIs handle the last two on their own.
@@ -678,7 +658,7 @@ Also built here, ahead of Phase 4: activating an inactive tab's app (⌘Tab, a c
 
 Deviations and notes for later phases:
 - On Quit, windows move into the cascade instantly; animating them needs one proxy per window (Phase 6 motion pass).
-- Fill and return are instant; preset animation through proxies comes with the Move & Resize flyout (Phase 4).
+- Fill and return are instant; animating them through proxies is left for the Phase 6 motion pass (the flyout that would have brought it was dropped in 4c).
 - Small notches can show where the strip's square bottom corners meet the window's rounded top corners (Phase 6 polish).
 - Grouped windows can't yet be dropped onto another group (Phase 4: merge a group into a group).
 - Synthesized checks activate other apps' windows, so they can catch the user's keystrokes; run them only while hands are off the keyboard (it happened once, harmlessly, with a scratch file).
@@ -695,14 +675,13 @@ Deviations and notes for later phases:
 - Tab width and overflow behavior for many tabs, in both placements.
 - Focus sync (Cmd-Tab or a click on an inactive member activates its tab).
 - Browser-layout keyboard shortcuts (⌃⌥Tab, ⌃⌥1–9, ⌃⌥W, ⌃⌥⇧N, ⌃⌥R).
-- **Move & Resize flyout** on the green button (§5.11), with all presets, other displays, and the tiled-margins setting.
-- Re-fit the group when macOS tiles a member window (§5.8). Group close, minimize, and fill in the Left mode right-click menu.
+- Re-fit the group when macOS tiles a member window (§5.8). This replaces the planned Move & Resize flyout copy, dropped for now (§5.11). Group close, minimize, and fill in the Left mode right-click menu.
 - **Spring-loaded tabs** and **hover previews** (§5.14), in both placements, with the icon-card fallback when Screen Recording is denied.
 
 **Demo:** a group of 8+ windows from 5+ apps. Every interaction in §5.7 works in both Top and Left modes.
 
 #### Phase 4 progress
-Built in four parts, each committed once checked by hand: **4a** tab management, **4b** renaming, shortcuts, and Left placement, **4c** the Move & Resize flyout, and **4d** spring-loaded tabs and hover previews.
+Built in four parts, each committed once checked by hand: **4a** tab management, **4b** renaming, shortcuts, and Left placement, **4c** re-fitting groups to macOS tiles, and **4d** spring-loaded tabs and hover previews.
 
 **4a (2026-10-20): done.** Verified by hand:
 - dropping a window onto a strip at a position (no pause, with an insertion marker)
@@ -751,6 +730,15 @@ Found by hand and fixed:
 - multi-tab tear-off and moves
 - the settle check
 - the fillet geometry
+
+**4c (2026-10-21): done.** The Move & Resize flyout copy was dropped for now (§5.11). In its place, a group re-fits to a tile when macOS tiles its active window (§5.8). Checked by hand, in Top and Left modes:
+- the window's own green-button menu, Window › Move & Resize (halves, quarters, Fill), the fn-⌃ arrow keys, and an edge drag all tile the whole group, strip included
+- the background tabs land in the same tile
+- ordinary moves and resizes are unchanged
+
+Also fixed: ending a title-bar drag no longer re-sends the active window's frame. That write could land after macOS tiled the window and undo the tile.
+
+128 unit tests in total. The new ones cover tile detection, with and without margins, and check that a group's own frame never reads as a tile. They also test the re-fit itself.
 
 ### Phase 5 — Robustness
 - Corner-parking fallback for misfit windows.
@@ -825,7 +813,7 @@ Found by hand and fixed:
   - `StripLayout` geometry and overflow math for both Top and Left placements
   - dissolving when a group drops to one window, from every path (tear-out, close, quit)
   - **quit restore** (§5.12): no window is ever sent a close; every window ends un-parked, full size, and cascaded inside the screen's usable area; minimized windows stay minimized; the 2-second cap is respected when an app is hung
-  - `LayoutPresets`: every half, quarter, fill, center, and arrange preset on single and multiple displays, with and without tiled-window margins, always against the group's outer frame; "Return to Previous Size" round trips; detecting when macOS has tiled a member
+  - tile detection: halves, quarters, and fill, with and without tiled-window margins; a group's own content frame never reads as a tile; a re-fit moves every member to the tile minus the strip
   - spring-loading timing: switches after the system delay, doesn't switch when spring-loading is off in System Settings, never accepts the drop
   - badge parsing from Dock items, and the badge timer stopping when the last group dissolves
   - hover previews: the capture stream stops when the popover closes; the fallback card appears when Screen Recording is denied

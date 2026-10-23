@@ -35,6 +35,11 @@ final class GroupManager {
     @ObservationIgnored var animates = true
     /// The window server's current bounds for a window (replaced in tests).
     @ObservationIgnored var windowBounds: (CGWindowID) -> CGRect? = { ScreenWindows.bounds(of: $0) }
+    /// The usable area (`NSScreen.visibleFrame`) of the screen holding a rect (replaced in tests).
+    @ObservationIgnored var usableArea: (CGRect) -> CGRect = { rect in
+        let screen = NSScreen.screens.first { ScreenGeometry.cgRect(fromAppKit: $0.frame).contains(CGPoint(x: rect.midX, y: rect.midY)) } ?? NSScreen.screens.first
+        return screen.map { ScreenGeometry.cgRect(fromAppKit: $0.visibleFrame) } ?? rect
+    }
     /// The group whose active window belongs to the frontmost app: the shortcuts act on it (§5.7).
     @ObservationIgnored private(set) var focusedGroup: UUID?
     @ObservationIgnored var onFocusedGroupChanged: ((UUID?) -> Void)?
@@ -514,7 +519,9 @@ final class GroupManager {
             groups[drag.group] = g
             strips[drag.group]?.place(content: bounds, above: id)
         }
-        syncMembers(of: drag.group, reconcile: false)
+        // The active window is already where the user left it. Writing its frame again could
+        // land after macOS tiles it (an edge drop) and undo the tile.
+        syncMembers(of: drag.group, reconcile: false, skipping: id)
     }
 
     /// Dragging the strip's empty area moves the whole group (§5.7): the strip moves with the
@@ -735,13 +742,31 @@ final class GroupManager {
                 guard let self else { return }
                 if NSEvent.pressedMouseButtons & 1 == 1 { return self.scheduleResync(gid) }
                 self.resyncTimers[gid] = nil
-                self.syncMembers(of: gid, reconcile: true)
+                if !self.refitIfTiled(gid) { self.syncMembers(of: gid, reconcile: true) }
             }
         }
     }
 
     /// Writes the group frame to every member that isn't there yet. With `reconcile`, the group
     /// then adopts the strictest frame the members actually took (Terminal's grid) and re-applies it.
+    /// macOS tiled the active window (§5.8): it fills a tile with no room for the strip. The
+    /// group's outer frame takes the tile instead, and the window shrinks by the strip's
+    /// thickness, so the result matches a tiled ordinary window. Checked once the window has
+    /// stopped moving, after macOS's tiling animation.
+    @discardableResult
+    func refitIfTiled(_ gid: UUID) -> Bool {
+        guard var g = groups[gid], !g.isMinimized else { return false }
+        let tile = g.content
+        guard GroupGeometry.isTile(tile, visibleFrame: visibleFrame(containing: tile)) else { return false }
+        g.content = StripLayout.frames(outer: tile, placement: g.placement).content
+        groups[gid] = g
+        FileLog.shared.write("refit group=\(gid.uuidString.prefix(8)) tile=\(tile)")
+        markSettling(gid)
+        strips[gid]?.place(content: g.content, above: g.activeID)
+        syncMembers(of: gid, reconcile: true, activeFirst: true) { self.scheduleSettleCheck(gid) }
+        return true
+    }
+
     private func markSettling(_ gid: UUID) {
         settlingUntil[gid] = ProcessInfo.processInfo.systemUptime + settleDuration
     }
@@ -786,12 +811,12 @@ final class GroupManager {
         setPosition(id, GroupGeometry.parkingOrigin(screen: screen, size: size, otherScreens: others))
     }
 
-    private func syncMembers(of gid: UUID, reconcile: Bool, activeFirst: Bool = false, then: (() -> Void)? = nil) {
+    private func syncMembers(of gid: UUID, reconcile: Bool, activeFirst: Bool = false, skipping skipped: CGWindowID? = nil, then: (() -> Void)? = nil) {
         tucked.remove(gid)
         guard let g = groups[gid] else { then?(); return }
         let requested = g.content
         let members = g.members.filter { id in
-            guard let f = registry.windows[id]?.window.frame else { return false }
+            guard id != skipped, let f = registry.windows[id]?.window.frame else { return false }
             return f != requested || !reconcile
         }
         guard !members.isEmpty else { then?(); return }
@@ -906,10 +931,7 @@ final class GroupManager {
         return screen.map { ScreenGeometry.cgRect(fromAppKit: $0.frame) } ?? rect
     }
 
-    private func visibleFrame(containing rect: CGRect) -> CGRect {
-        let screen = NSScreen.screens.first { ScreenGeometry.cgRect(fromAppKit: $0.frame).contains(CGPoint(x: rect.midX, y: rect.midY)) } ?? NSScreen.screens.first
-        return screen.map { ScreenGeometry.cgRect(fromAppKit: $0.visibleFrame) } ?? rect
-    }
+    private func visibleFrame(containing rect: CGRect) -> CGRect { usableArea(rect) }
 }
 
 /// Counts the quit restore's window moves and calls `done` once: when they've all answered, or
