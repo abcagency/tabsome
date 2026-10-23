@@ -774,6 +774,35 @@ Not done: app badges on tabs (§5.14) belong to a later phase.
 
 **Demo:** the manual QA matrix (§9) passes.
 
+#### Phase 5 progress
+Built in four parts, each committed once checked by hand:
+- **5a:** the recovery file and every way Tabsome can stop
+- **5b:** misfits, full screen, Spaces and displays, sleep/wake, app quit and crash, and permission revoke
+- **5c:** exclusions, the security list, loop detection, and Stage Manager
+- **5d:** the leak test and the QA matrix
+
+**5a (2026-10-23): done.** Checked by hand:
+- **Force Quit and relaunch:** the next launch undoes the leftover groups, the same way Quit does. The windows fan out, the active one stays on top, and nothing closes.
+- **Pause** (Settings › General): every group is undone, the menu bar icon dims, and no new groups form. Unpausing doesn't bring the old groups back. The setting survives a relaunch.
+- **Quit:** windows fan out and the recovery file is deleted.
+- **Accessibility turned off and back on:** the groups are let go where they are, then undone once the permission returns.
+
+How it works:
+- **The recovery file** is `recovery.json` in Application Support. It holds window IDs, pids, bundle IDs, the outer frame, and the minimized flag; no titles or names (S4). It's saved 0.3 s after groups change, so a drag writes it once, and it's removed when there are no groups.
+- **Recovery on launch** waits up to 3 s for the recorded windows to show up in the registry. It restores only windows whose ID still belongs to the same pid, and skips any the user has already tabbed again.
+- **A quit restore that hits the 2 s cap** keeps the file, so the next launch fixes the window that didn't answer.
+- **Logout, restart, and shutdown** take the same `applicationShouldTerminate` path as Quit.
+- **Sparkle's relaunch** will too, once Sparkle is added in Phase 7.
+
+Found and fixed: the quit restore counted windows as it sent each move. An app that answered at once could bring the count to zero early and report "all done" while windows were still to come. Every move is now counted before any is sent.
+
+156 unit tests in total. The new ones cover:
+- the recovery state's contents (and that no titles reach it)
+- coalesced saves
+- recovery: restoring, waiting for windows, a reused window ID, and a minimized group
+- the save/load/delete round trip
+- a quit restore that runs out of time
+
 ### Phase 6 — Settings and polish
 - **Settings › General:**
   - **Launch at login** toggle, off by default. Uses `SMAppService.mainApp.register()` / `unregister()`. The toggle reads its state from `SMAppService.mainApp.status` rather than a stored flag, so it stays correct if the user changes it in System Settings › General › Login Items. If the status is `.requiresApproval`, show a note with a button that opens Login Items.

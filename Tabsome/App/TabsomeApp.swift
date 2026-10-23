@@ -8,7 +8,7 @@ struct TabsomeApp: App {
         MenuBarExtra {
             MenuBarMenu(model: delegate.model)
         } label: {
-            MenuBarLabel(permissions: delegate.model.permissions)
+            MenuBarLabel(permissions: delegate.model.permissions, paused: delegate.model.isPaused)
         }
         Settings {
             SettingsView(model: delegate.model)

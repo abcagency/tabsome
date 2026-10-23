@@ -126,7 +126,7 @@ struct GroupManagerTests {
         manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
         system.clearCommands()
         var finished = false
-        manager.restoreAll(timeout: 2) { finished = true }
+        manager.restoreAll(timeout: 2) { _ in finished = true }
         #expect(finished)
         #expect(manager.groups.isEmpty)
         #expect(!system.commands.contains { $0.0 == .close })

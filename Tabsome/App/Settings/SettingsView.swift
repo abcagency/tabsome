@@ -37,8 +37,18 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         @Bindable var appearance = model.appearance
+        @Bindable var model = model
         let login = model.launchAtLogin
         Form {
+            Section {
+                Toggle("Pause Tabsome", isOn: $model.isPaused)
+            } footer: {
+                Text(model.isPaused
+                     ? "Tabsome is paused. Windows can’t be dragged together until you turn this off."
+                     : "Pausing undoes every group and leaves all the windows open.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Section {
                 Toggle("Launch at login", isOn: Binding(get: { login.isEnabled || login.needsApproval }, set: { login.set($0) }))
                 if login.needsApproval {

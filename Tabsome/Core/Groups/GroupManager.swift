@@ -7,7 +7,9 @@ import CoreGraphics
 @MainActor
 @Observable
 final class GroupManager {
-    private(set) var groups: [UUID: TabGroup] = [:]
+    private(set) var groups: [UUID: TabGroup] = [:] {
+        didSet { scheduleRecoverySave() }
+    }
 
     @ObservationIgnored private var groupOf: [CGWindowID: UUID] = [:]
     @ObservationIgnored private var strips: [UUID: TabBarWindow] = [:]
@@ -45,11 +47,19 @@ final class GroupManager {
     @ObservationIgnored var onFocusedGroupChanged: ((UUID?) -> Void)?
     /// Asked before the red button closes every tab (PLAN.md §5.11); returns false to cancel.
     @ObservationIgnored var confirmCloseAll: ((_ count: Int) -> Bool)?
+    /// Saves the crash-recovery state (§5.12, P7) shortly after groups change. Nil in tests.
+    @ObservationIgnored var onRecoveryStateChanged: ((RecoveryState) -> Void)?
+    @ObservationIgnored private var recoverySave: Timer?
+    /// A recovery waiting for its windows to show up in the registry.
+    @ObservationIgnored private var pendingRecovery: (state: RecoveryState, done: () -> Void)?
 
     init(registry: WindowRegistry, system: WindowSystem) {
         self.registry = registry
         self.system = system
-        registry.onWindowUpdated = { [weak self] old, new in self?.windowUpdated(old: old, new: new) }
+        registry.onWindowUpdated = { [weak self] old, new in
+            self?.windowUpdated(old: old, new: new)
+            self?.recoverIfReady()
+        }
         registry.onWindowRemoved = { [weak self] id, _ in self?.windowRemoved(id) }
         registry.onMainWindowChanged = { [weak self] pid, id in self?.mainWindowChanged(pid: pid, id: id) }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -593,45 +603,131 @@ final class GroupManager {
     /// Quit (PLAN.md §5.12): untab everything and close nothing. Strips go, every window gets
     /// its strip space back, parked windows come back, and the tabs fan out so none stay hidden.
     /// Calls `done` when every window has answered, or after `timeout` (a hung app can't block quitting).
-    func restoreAll(timeout: TimeInterval = 2, done: @escaping () -> Void) {
+    /// `done(true)` once every window answered; `done(false)` when the time cap ran out first,
+    /// so the recovery file should stay for the next launch.
+    func restoreAll(timeout: TimeInterval = 2, done: @escaping (_ allLanded: Bool) -> Void) {
         let all = groups.values
         groups.removeAll()
         groupOf.removeAll()
+        cancelRecoverySave()
         resyncTimers.values.forEach { $0.invalidate() }
         resyncTimers.removeAll()
         strips.values.forEach { $0.dismiss() }
         strips.removeAll()
         updateFocus()
-        let tracker = RestoreTracker(done: done)
+        // Every move is counted before any is sent: an app that answers at once must not
+        // bring the count to zero while other windows are still to come.
+        var moves: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
+        var raises: [(id: CGWindowID, pid: pid_t)] = []
         for g in all {
             let order = [g.activeID] + g.inactive
             let visible = visibleFrame(containing: g.outer)
             // A minimized group's window stays in the Dock where the user put it (§5.12 step 4);
             // its parked group-mates come back on screen.
-            let plan = GroupGeometry.cascade(outer: g.outer, activeFirst: g.isMinimized ? g.inactive : order, visibleFrame: visible)
-            for (id, frame) in plan {
-                guard let entry = registry.windows[id] else { continue }
-                tracker.pending += 1
-                system.perform(.setFrame(frame), window: id, pid: entry.app.pid) { _ in tracker.completeOne() }
+            let onScreen = g.isMinimized ? g.inactive : order
+            let plan = GroupGeometry.cascade(outer: g.outer, activeFirst: onScreen, visibleFrame: visible)
+            for id in onScreen {
+                guard let entry = registry.windows[id], let frame = plan[id] else { continue }
+                moves.append((id, entry.app.pid, frame))
             }
-            if !g.isMinimized, let entry = registry.windows[g.activeID] {
-                system.perform(.raise, window: g.activeID, pid: entry.app.pid, completion: nil)
-            }
+            if !g.isMinimized, let entry = registry.windows[g.activeID] { raises.append((g.activeID, entry.app.pid)) }
         }
-        FileLog.shared.write("restore all groups=\(all.count) windows=\(tracker.pending)")
-        if tracker.pending == 0 { return tracker.finish() }
+        let tracker = RestoreTracker(done: done)
+        tracker.pending = moves.count
+        for m in moves {
+            system.perform(.setFrame(m.frame), window: m.id, pid: m.pid) { _ in tracker.completeOne() }
+        }
+        for r in raises { system.perform(.raise, window: r.id, pid: r.pid, completion: nil) }
+        FileLog.shared.write("restore all groups=\(all.count) windows=\(moves.count)")
+        if moves.isEmpty { return tracker.finish(allLanded: true) }
         // A run-loop timer in common modes, so it fires inside Quit's nested run loop too.
-        let cap = Timer(timeInterval: timeout, repeats: false) { _ in MainActor.assumeIsolated { tracker.finish() } }
+        let cap = Timer(timeInterval: timeout, repeats: false) { _ in MainActor.assumeIsolated { tracker.finish(allLanded: false) } }
         RunLoop.main.add(cap, forMode: .common)
     }
 
     /// Permission revoked: AX is gone, so just drop everything Tabsome drew (§5.8).
+    /// Accessibility was turned off: Tabsome can't move windows, so it lets go of the groups
+    /// where they are. The recovery file stays, so they're undone once it's back (§5.8).
     func abandonAll() {
         strips.values.forEach { $0.dismiss() }
         strips.removeAll()
         groups.removeAll()
         groupOf.removeAll()
+        cancelRecoverySave()
+        pendingRecovery = nil
         updateFocus()
+    }
+
+    // MARK: Crash recovery (§5.12, P7)
+
+    /// Every group's windows and outer frame: what the next launch needs if this one never gets
+    /// to run its quit restore.
+    func recoveryState() -> RecoveryState {
+        func window(_ id: CGWindowID) -> RecoveryState.Window? {
+            registry.windows[id].map { .init(id: id, pid: $0.app.pid, bundleID: $0.app.bundleID) }
+        }
+        let saved = groups.values.sorted { $0.id.uuidString < $1.id.uuidString }.compactMap { g -> RecoveryState.Group? in
+            guard let active = window(g.activeID) else { return nil }
+            return .init(outer: g.outer, active: active, others: g.inactive.compactMap(window), minimized: g.isMinimized)
+        }
+        return RecoveryState(groups: saved)
+    }
+
+    private func scheduleRecoverySave() {
+        guard onRecoveryStateChanged != nil else { return }
+        recoverySave?.invalidate()
+        // Coalesced: a drag changes the group frame many times a second.
+        recoverySave = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.recoverySave = nil
+                self.onRecoveryStateChanged?(self.recoveryState())
+            }
+        }
+    }
+
+    private func cancelRecoverySave() {
+        recoverySave?.invalidate()
+        recoverySave = nil
+    }
+
+    /// The last run stopped without undoing its groups (a crash, Force Quit, or Accessibility
+    /// turned off): undo them now, the same way Quit does. Waits up to `timeout` for the
+    /// recorded windows to appear in the registry, then restores whichever are still there.
+    /// A window counts only if its ID still belongs to the same process.
+    func recover(_ state: RecoveryState, timeout: TimeInterval = 3, done: @escaping () -> Void) {
+        pendingRecovery = (state, done)
+        recoverIfReady()
+        guard pendingRecovery != nil else { return }
+        let cap = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in MainActor.assumeIsolated { self?.finishRecovery() } }
+        RunLoop.main.add(cap, forMode: .common)
+    }
+
+    private func recoverIfReady() {
+        guard let pending = pendingRecovery else { return }
+        let windows = pending.state.groups.flatMap { [$0.active] + $0.others }
+        if windows.allSatisfy({ registry.windows[$0.id]?.app.pid == $0.pid }) { finishRecovery() }
+    }
+
+    private func finishRecovery() {
+        guard let pending = pendingRecovery else { return }
+        pendingRecovery = nil
+        var moved = 0
+        for g in pending.state.groups {
+            // Skip windows that are gone, or that the user has already tabbed again.
+            let here = { (w: RecoveryState.Window) in self.registry.windows[w.id]?.app.pid == w.pid && self.groupOf[w.id] == nil }
+            let windows = ([g.active] + g.others).filter(here).map(\.id)
+            let onScreen = g.minimized ? g.others.filter(here).map(\.id) : windows
+            let plan = GroupGeometry.cascade(outer: g.outer, activeFirst: onScreen, visibleFrame: visibleFrame(containing: g.outer))
+            for id in onScreen {
+                guard let frame = plan[id] else { continue }
+                setFrame(id, frame)
+                moved += 1
+            }
+            if !g.minimized, here(g.active) { command(.raise, g.active.id) }
+        }
+        FileLog.shared.write("recovered groups=\(pending.state.groups.count) windows=\(moved)")
+        pending.done()
     }
 
     // MARK: Registry events (§5.8)
@@ -939,18 +1035,18 @@ final class GroupManager {
 @MainActor
 private final class RestoreTracker {
     var pending = 0
-    private var done: (() -> Void)?
+    private var done: ((Bool) -> Void)?
 
-    init(done: @escaping () -> Void) { self.done = done }
+    init(done: @escaping (Bool) -> Void) { self.done = done }
 
     func completeOne() {
         pending -= 1
-        if pending == 0 { finish() }
+        if pending == 0 { finish(allLanded: true) }
     }
 
-    func finish() {
+    func finish(allLanded: Bool) {
         let d = done
         done = nil
-        d?()
+        d?(allLanded)
     }
 }

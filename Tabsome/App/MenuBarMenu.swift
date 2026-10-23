@@ -29,10 +29,12 @@ struct MenuBarMenu: View {
 /// Template icon, so it follows the menu bar's own look; badged while Accessibility is missing.
 struct MenuBarLabel: View {
     let permissions: Permissions
+    /// Dimmed while paused (PLAN.md §1).
+    let paused: Bool
 
     var body: some View {
-        Image(nsImage: MenuBarIconImage.image(badged: !permissions.accessibility))
-            .accessibilityLabel(permissions.accessibility ? Brand.name : "\(Brand.name), Accessibility permission needed")
+        Image(nsImage: MenuBarIconImage.image(badged: !permissions.accessibility, dimmed: paused))
+            .accessibilityLabel(!permissions.accessibility ? "\(Brand.name), Accessibility permission needed" : paused ? "\(Brand.name), paused" : Brand.name)
             #if DEBUG
             .modifier(DebugSettingsHook())
             #endif
@@ -40,16 +42,18 @@ struct MenuBarLabel: View {
 }
 
 enum MenuBarIconImage {
-    static func image(badged: Bool) -> NSImage {
+    static func image(badged: Bool, dimmed: Bool = false) -> NSImage {
         let base = NSImage(named: "MenuBarIcon")
             ?? NSImage(systemSymbolName: "rectangle.topthird.inset.filled", accessibilityDescription: Brand.name)!
-        guard badged else {
+        guard badged || dimmed else {
             base.isTemplate = true
             return base
         }
         let size = base.size
         let image = NSImage(size: size, flipped: false) { rect in
-            base.draw(in: rect)
+            // A template's alpha is its ink: drawn at partial opacity, the menu bar shows it dimmed.
+            base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: dimmed ? 0.4 : 1)
+            guard badged else { return true }
             // A small dot at the bottom right, knocked out of the glyph so it reads at 16 pt.
             let dot = NSRect(x: size.width - 7, y: 0, width: 7, height: 7)
             NSGraphicsContext.current?.compositingOperation = .clear
