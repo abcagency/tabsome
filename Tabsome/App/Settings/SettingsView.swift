@@ -13,6 +13,9 @@ struct SettingsView: View {
             Tab("Tabs", systemImage: "rectangle.topthird.inset.filled") {
                 TabsSettingsView(model: model)
             }
+            Tab("Apps", systemImage: "square.grid.2x2") {
+                AppsSettingsView(model: model)
+            }
             Tab("About", systemImage: "info.circle") {
                 AboutSettingsView()
             }
@@ -34,12 +37,25 @@ extension View {
 
 struct GeneralSettingsView: View {
     let model: AppModel
+    @State private var stageManagerOn = StageManager.isOn
 
     var body: some View {
         @Bindable var appearance = model.appearance
         @Bindable var model = model
         let login = model.launchAtLogin
         Form {
+            if stageManagerOn {
+                Section {
+                    Label("Stage Manager is on", systemImage: "exclamationmark.triangle.fill")
+                        .symbolRenderingMode(.multicolor)
+                    HStack {
+                        Text("It moves windows on its own, which conflicts with tabs.")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open Desktop & Dock…") { StageManager.openSettings() }
+                    }
+                }
+            }
             Section {
                 Toggle("Pause Tabsome", isOn: $model.isPaused)
             } footer: {
@@ -70,8 +86,14 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .fitsContent()
-        .onAppear { login.refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in login.refresh() }
+        .onAppear {
+            login.refresh()
+            stageManagerOn = StageManager.isOn
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            login.refresh()
+            stageManagerOn = StageManager.isOn
+        }
     }
 }
 

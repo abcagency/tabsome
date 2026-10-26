@@ -528,7 +528,7 @@ Tabsome needs broad system access and talks to every running app. That's normal 
 | P1 | **A frozen app freezes Tabsome.** AX calls are synchronous messages to the target app, and they block until the messaging timeout if that app is hung (1.5 s by default on macOS 27; older docs say 6 s) | Set `AXUIElementSetMessagingTimeout` to about 0.5 s on every element. Run **each app's AX work and AXObserver on its own thread**, so a hung app only stalls its own thread. The main thread never makes AX calls; it only receives results. If an app keeps timing out, mark it "unresponsive", ignore it until it recovers, and leave its tabs alone. (This only works one way: Tabsome can't freeze other apps, because they never wait on it) | 1 |
 | P2 | Idle CPU and battery drain | Everything is event-driven, with **no polling and no repeating timers while idle**. The one exception is the Dock badge check (§5.14): every 3 s, one call, only while a group exists. With no groups, nothing runs at all. `CGWindowListCopyWindowInfo` runs only during an active drag, at most 30 times a second. The single-window bounds query that keeps the strip on a dragged window (§5.6) runs only during that drag, at most once per display frame. The post-activation settle burst (§5.6) runs at most 300 ms per focus change. The display link runs only while something is animating. Budget: **0% CPU and under 50 MB of memory when idle** | 1, checked in 6 |
 | P3 | Making other apps redraw too much | During a drag or resize, only Tabsome's strip moves live. Inactive members are tucked into a screen corner when it starts (they'd be exposed otherwise) and re-synced **once, on mouse up**: two writes per tab per interaction. Stacking (the default way of hiding inactive tabs) lets macOS tell covered windows they're hidden so apps like Safari slow their rendering. Corner-parked windows still count as visible, so parking stays the fallback, never the default | 3 |
-| P4 | **Fights with other window managers** (Rectangle, Stage Manager, an app's own window code) looping and burning CPU | **Loop detection:** if a member's frame is changed against Tabsome more than 3 times in 1 s, stop writing to it, remove it from its group, and show a one-time notice naming the app | 5 |
+| P4 | **Fights with other window managers** (Rectangle, Stage Manager, an app's own window code) looping and burning CPU | **Loop detection:** if a member's frame is changed against Tabsome more than 3 times in 2 s, stop writing to it, remove it from its group, and show a one-time notice naming the app. (2 s, not the 1 s first planned: Tabsome's own debounce re-places a window at most about 4 times a second, so 1 s could miss a real fight.) | 5 |
 | P5 | Reacting to its own moves | Every AX write records the frame it expects with a short expiry. "Moved" or "resized" notifications that match an expected frame are ignored | 3 |
 | P6 | Slow memory leaks from AX handles and observers | One owner per app (`AXApp`) holds every AX handle and observer for that app and tears them all down when the app quits. Test: launch and quit 100 apps with the Leaks instrument attached; memory must return to baseline | 1, checked in 5 |
 | P7 | Windows stuck off-screen after a crash | Crash-recovery file written on every group change; next launch un-parks everything (§5.8) | 5 |
@@ -829,6 +829,20 @@ Decided here: grow the group to a member's minimum size rather than park that me
 - parking around a smaller active tab, and coming back in order
 - the settle check leaving misfits alone
 
+**5c (2026-10-26): done.** Checked by hand:
+- **Settings › Apps** (pulled forward from Phase 6 at the user's request): a list of apps Tabsome never tabs. It starts with System Settings. The + button lists the running apps and has **Choose App…** for any installed app, and − removes the selection. Adding an app takes its windows out of their groups at once, each cascaded as its own window; nothing closes. Excluded apps can't be dragged into groups and aren't offered by "+".
+- **Stage Manager:** a warning in Settings › General with a button to Desktop & Dock, plus a one-time notice at launch while it's on. It's read from `com.apple.WindowManager` › `GloballyEnabled`.
+
+Also built, and covered by the tests:
+- **The security list** (S6) now covers authorization, Touch ID, Keychain, the Passwords app, 14 password managers, system surfaces (Dock, Control Center, Spotlight, Stage Manager, screenshot UI), and Tabsome itself. Users can't override it, and the Apps pane's footer says so.
+- **Secure input:** no window capture while it's on, for proxies or previews. Hover previews fall back to the icon card.
+- **Loop detection (P4):** a move that lands within 1 s of Tabsome placing the window, with no mouse down, counts against it. More than 3 in 2 s takes the window out of its group and shows a one-time notice naming the app. Notices are remembered in `shownNotices`.
+
+182 unit tests in total. The new ones cover:
+- the security list and the user's list
+- fight counting, and a fight removing the window
+- exclusion removing windows from groups and from "+"
+
 ### Phase 6 — Settings and polish
 - **Settings › General:**
   - **Launch at login** toggle, off by default. Uses `SMAppService.mainApp.register()` / `unregister()`. The toggle reads its state from `SMAppService.mainApp.status` rather than a stored flag, so it stays correct if the user changes it in System Settings › General › Login Items. If the status is `.requiresApproval`, show a note with a button that opens Login Items.
@@ -845,7 +859,7 @@ Decided here: grow the group to a member's minimum size rather than park that me
   - Show previews when hovering tabs (on by default)
   - Ask before closing all tabs (the red button), on by default
   - Tab min width (Top mode)
-- **Settings › Apps:** the list of apps Tabsome never tabs, with + / − buttons and an app picker.
+- **Settings › Apps:** the list of apps Tabsome never tabs, with + / − buttons and an app picker. *(Built early, in Phase 5c.)*
 - **Settings › Shortcuts:** rebind.
 - **Settings › About:** version, Check for Updates…, Report a Problem…, and acknowledgements.
 - **Browser parity pass:** go through every row of the §1 browser table side by side with Safari and Chrome, and fix anything that behaves differently.

@@ -21,6 +21,15 @@ final class AppModel {
     }
     @ObservationIgnored private(set) lazy var drag = DragCoordinator(registry: registry, groups: groups)
 
+    /// Settings › Apps (PLAN.md §6.1 S6): apps Tabsome never tabs. Adding one takes its windows
+    /// out of their groups right away.
+    var excludedApps: [String] = ExcludedApps.list {
+        didSet {
+            ExcludedApps.list = excludedApps
+            groups.removeExcluded(Set(excludedApps))
+        }
+    }
+
     static let pausedKey = "paused"
     /// Settings › General › Pause (PLAN.md §5.12): every group is undone, nothing is closed, and
     /// no new groups form until it's turned off. Groups don't come back afterwards.
@@ -62,6 +71,32 @@ final class AppModel {
             if granted { start() } else { stopAll() }
         }
         registry.onAccessibilityDisabled = { [weak self] in self?.permissions.refresh() }
+        groups.onFight = { appName, bundleID in
+            // After the event that found it, not inside it: the notice is a modal alert.
+            DispatchQueue.main.async {
+                Self.showOnce("fight.\(bundleID ?? appName)",
+                             title: "\(appName) was taken out of its tab group",
+                             message: "Something keeps moving \(appName)’s window back each time Tabsome places it, such as another window manager or the app itself. To keep them from fighting, Tabsome left the window on its own. If you use a window manager, try turning off its rules for \(appName).")
+            }
+        }
+    }
+
+    static let shownNoticesKey = "shownNotices"
+
+    /// A notice the user sees once, ever (PLAN.md §6.2 P4, Stage Manager).
+    static func showOnce(_ id: String, title: String, message: String, action: (String, () -> Void)? = nil) {
+        let defaults = UserDefaults.standard
+        var shown = Set(defaults.stringArray(forKey: shownNoticesKey) ?? [])
+        guard !shown.contains(id) else { return }
+        shown.insert(id)
+        defaults.set(Array(shown), forKey: shownNoticesKey)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        if let action { alert.addButton(withTitle: action.0) }
+        alert.addButton(withTitle: action == nil ? "OK" : "Not Now")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { action?.1() }
     }
 
     var needsOnboarding: Bool { !permissions.accessibility || !onboardingCompleted }
@@ -99,6 +134,15 @@ final class AppModel {
         }
         groups.onRecoveryStateChanged = { RecoveryFile.save($0) }
         if !isPaused { drag.start() }
+        if StageManager.isOn {
+            FileLog.shared.write("stage manager is on")
+            DispatchQueue.main.async {
+                Self.showOnce("stageManager",
+                             title: "Stage Manager is on",
+                             message: "Stage Manager moves and resizes windows on its own, which conflicts with tabs. Tabs work best with Stage Manager turned off in System Settings › Desktop & Dock.",
+                             action: ("Open Desktop & Dock Settings", StageManager.openSettings))
+            }
+        }
     }
 
     /// Accessibility turned off, or the app is exiting. Groups are let go where they are; the

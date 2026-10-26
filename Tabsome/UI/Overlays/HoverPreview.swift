@@ -101,9 +101,11 @@ final class PreviewStream: PreviewStreaming {
     private var stopped = false
     private let output: Output
 
-    /// Nil without the Screen Recording permission: the preview shows the app's icon instead.
+    /// Nil without the Screen Recording permission, or while secure input is on: the preview
+    /// shows the app's icon instead.
     static func make(window: CGWindowID, pixels: CGSize, onFrame: @escaping @MainActor (CGImage) -> Void) -> PreviewStreaming? {
-        guard CGPreflightScreenCaptureAccess() else { return nil }
+        // No pictures while a password field has focus anywhere (S6): the icon card instead.
+        guard CGPreflightScreenCaptureAccess(), !Eligibility.secureInputActive else { return nil }
         let s = PreviewStream(onFrame: onFrame)
         Task { await s.start(window: window, pixels: pixels) }
         return s

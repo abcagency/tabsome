@@ -9,7 +9,7 @@ import SwiftUI
 @MainActor
 enum WindowCapture {
     static func capture(_ id: CGWindowID) async -> CGImage? {
-        guard CGPreflightScreenCaptureAccess(),
+        guard CGPreflightScreenCaptureAccess(), !Eligibility.secureInputActive,
               let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               let window = content.windows.first(where: { $0.windowID == id }) else { return nil }
         let filter = SCContentFilter(desktopIndependentWindow: window)

@@ -14,6 +14,10 @@ final class GroupManager {
     @ObservationIgnored private var groupOf: [CGWindowID: UUID] = [:]
     @ObservationIgnored private var strips: [UUID: TabBarWindow] = [:]
     @ObservationIgnored private var expected = ExpectedFrames()
+    @ObservationIgnored private var fights = FightDetector()
+    /// A member was taken out of its group because something kept moving it back (P4):
+    /// the app's name and bundle ID, for a one-time notice.
+    @ObservationIgnored var onFight: ((_ appName: String, _ bundleID: String?) -> Void)?
     @ObservationIgnored private var resyncTimers: [UUID: Timer] = [:]
     @ObservationIgnored private var liveDrag: (group: UUID, startContent: CGRect)?
     @ObservationIgnored private var stripDrag: (group: UUID, startContent: CGRect, startMouse: CGPoint, inFlight: Bool, pending: CGPoint?)?
@@ -778,6 +782,11 @@ final class GroupManager {
         guard old?.window.frame != w.frame, !g.isMinimized, liveDrag?.group != gid, stripDrag?.group != gid else { return }
         let now = ProcessInfo.processInfo.systemUptime
         if expected.isExpected(w.frame, for: id, now: now) { return }
+        // Moved somewhere else right after Tabsome placed it, with no mouse involved: something
+        // is moving it back. Once that adds up to a fight, Tabsome lets go of the window (P4).
+        if NSEvent.pressedMouseButtons & 1 == 0, expected.wroteRecently(id, now: now), fights.record(id, now: now) {
+            return letGoAfterFight(id, app: new.app)
+        }
         // While the mouse is down, a move or resize is the user's, settling or not.
         if let until = settlingUntil[gid], now < until, NSEvent.pressedMouseButtons & 1 == 0 {
             // Tabsome is still moving this group's windows: an in-between frame (or a window that
@@ -805,8 +814,23 @@ final class GroupManager {
         for other in g.inactive { park(other, from: g) }
     }
 
+    private func letGoAfterFight(_ id: CGWindowID, app: WindowRegistry.AppInfo) {
+        FileLog.shared.write("fight: window=\(id) of \(app.bundleID ?? "?") keeps being moved back; taking it out of its group")
+        fights.forget(id)
+        removeMember(id, closing: false)
+        onFight?(app.name, app.bundleID)
+    }
+
+    /// Settings › Apps changed: windows of newly excluded apps leave their groups, each as its
+    /// own window, cascaded so it's visible (like Move Tab to New Window).
+    func removeExcluded(_ excluded: Set<String>) {
+        let leaving = groupOf.keys.filter { id in registry.windows[id]?.app.bundleID.map(excluded.contains) ?? false }
+        for id in leaving.sorted() where groupOf[id] != nil { moveToNewWindow(id) }
+    }
+
     private func windowRemoved(_ id: CGWindowID) {
         expected.forget(id)
+        fights.forget(id)
         guard groupOf[id] != nil else { return }
         removeMember(id, closing: true)
     }
