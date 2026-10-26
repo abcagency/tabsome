@@ -228,7 +228,8 @@ The state machine is pure. It takes `(cursorPoint, timestamp, targetUnderCursor)
 ### 5.5 Keeping inactive tabs hidden (`Concealment`)
 - **Default (stacking):** inactive members share the exact frame and sit directly beneath the active window. Switching = `AXRaise` the window, then `NSRunningApplication.activate()` (`AXRaise` alone doesn't cross apps). That measured 31–34 ms median in Phase 0, with nothing showing through, and Mission Control still shows real windows.
 - **Snapping apps:** some apps round the frame they're given (Terminal snaps to its character grid). The group frame is the frame the **strictest member actually took**, re-applied to the others, so no back window peeks out at an edge.
-- **Corner parking** handles members that can't match the group frame (fixed-size windows, or a minimum size larger than the group). They're moved to the screen's bottom-right corner, leaving 1 px on screen, while inactive. This is the approach AeroSpace uses. They return to the group frame when activated.
+- **Members that can't get small enough** (a minimum size, or a fixed size, bigger than the group) make the **group grow to fit them**, so every tab still shares one frame. The grown group moves up or left if it would run off the screen's usable area. (Decided in Phase 5: growing beats parking, because the tab then looks like the others when it's active.)
+- **Corner parking** handles the opposite case: a member that can't get *as big* as the group (a maximum or fixed size). When it's active, the other tabs would show around it, so they're moved to the screen's bottom-right corner, leaving 1 px on screen. When it's in the background, it's simply covered. This is the approach AeroSpace uses. Parked tabs return to the group frame before they're activated. Tabsome predicts which tabs would show from the size each window took the last time it was asked for the group frame.
 - **Rejected options:**
   - *Minimize*: slow genie animation and Dock clutter.
   - *App hide*: hides all of that app's windows, which breaks two tabs from the same app.
@@ -803,6 +804,31 @@ Found and fixed: the quit restore counted windows as it sent each move. An app t
 - the save/load/delete round trip
 - a quit restore that runs out of time
 
+**5b (2026-10-26): done.** Checked by hand:
+- **A member that can't get small enough** (Notes' minimum height in a short group) makes the group grow to its size. Every tab shares the frame, and nothing goes to a corner.
+- **Corner parking** for background tabs that would show around a smaller active tab (§5.5).
+- **The strip follows its window across Spaces** and hides with its app (⌘H).
+- **Display changes:** a group left off-screen moves onto a screen, and every group re-syncs.
+- **Sleep/wake:** groups, strips, and tabs come back as they were.
+- **App quit and crash** were already handled: the app's tabs are removed, and a group of one dissolves.
+
+How it works:
+- **Prediction:** each member's last answer to the group frame (asked for, took) predicts what it will take next. Bigger means a minimum held it; smaller means a maximum held it.
+- **Growing:** `GroupGeometry.reconcile` grows the group to the largest minimum, then `keepOnScreen` keeps the grown outer frame inside the usable area.
+- **Concealment** runs after every sync and tab switch. The settle check leaves misfits and parked tabs alone.
+- **Strips:** they re-check where their window is 0.15 s after a Space change, hide/unhide, or app activation. They use CGWindowList's on-screen list, and order out and back in to join the current Space.
+- **Displays:** `didChangeScreenParameters` moves a group that's less than half on any screen with `refitToScreens`, re-parks parked tabs on the group's current screen, and re-syncs.
+- **Wake:** the registry re-reads every app's windows, keeping its entries, and the groups are re-validated 1.5 s later.
+
+Decided here: grow the group to a member's minimum size rather than park that member (the user's call). A group can't be resized below that minimum, and it keeps its grown size if that member leaves.
+
+173 unit tests in total. The new ones cover:
+- size prediction and covering
+- moving a group back onto a screen
+- growing to a minimum, and staying on screen
+- parking around a smaller active tab, and coming back in order
+- the settle check leaving misfits alone
+
 ### Phase 6 — Settings and polish
 - **Settings › General:**
   - **Launch at login** toggle, off by default. Uses `SMAppService.mainApp.register()` / `unregister()`. The toggle reads its state from `SMAppService.mainApp.status` rather than a stored flag, so it stays correct if the user changes it in System Settings › General › Login Items. If the status is `.requiresApproval`, show a note with a button that opens Login Items.
@@ -844,7 +870,7 @@ Found and fixed: the quit restore counted windows as it sent each move. An app t
 |---|---|
 | Overlay can't be ordered relative to another app's window | **Resolved in Phase 0:** `order(.above, relativeTo:)` works with another app's window, plus the post-activation settle burst (§5.6). The occlusion-based hide/clip fallback isn't needed |
 | Apps that resize asynchronously or snap to a grid (Terminal, iTerm) | Tolerate a few pt of mismatch. Re-read the actual frame after writing it and base the group frame on what the active window really ended up as |
-| Windows with min/max sizes or fixed sizes | Group frame = largest common size that fits. Misfits get corner-parked when inactive |
+| Windows with min/max sizes or fixed sizes | The group grows to the largest minimum size among its members. Background tabs that would show around a smaller active tab (a maximum or fixed size) get corner-parked |
 | AX latency or flakiness in some apps (Electron, Java), or a hung app | One thread per app with short timeouts (§6.2 P1). Retry with backoff, coalesce writes, keep AX calls off hot paths during the drag |
 | Inactive tabs peek through transparent or vibrant windows | Corner-park inactive members for windows flagged as non-opaque. A per-app setting forces corner parking |
 | Fights with other window managers (Stage Manager, Rectangle, macOS edge tiling) | Loop detection and back-off (§6.2 P4). Detect them and show a warning in Settings. Document it in the FAQ |

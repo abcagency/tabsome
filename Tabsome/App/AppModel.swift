@@ -70,8 +70,23 @@ final class AppModel {
         if permissions.accessibility { start() }
     }
 
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+
     private func start() {
         registry.start()
+        // After sleep, re-read every app's windows, then re-validate the groups (§5.8).
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.registry.isRunning else { return }
+                    FileLog.shared.write("wake")
+                    self.registry.refresh()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                        MainActor.assumeIsolated { self?.groups.revalidateAll() }
+                    }
+                }
+            }
+        }
         groups.targeting = drag
         // Groups left over from a crash, Force Quit, or the permission being turned off are
         // undone first, the way Quit would have (§5.12). Then every change is saved again.

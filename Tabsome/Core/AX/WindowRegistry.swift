@@ -89,6 +89,17 @@ final class WindowRegistry {
         FileLog.shared.write("registry stopped")
     }
 
+    /// After wake (PLAN.md §5.8): every app's window list is read again from scratch. The
+    /// registry keeps its entries, so groups survive; windows that are gone are reported removed.
+    func refresh() {
+        guard isRunning else { return }
+        for pid in apps.keys {
+            system.untrack(pid: pid)
+            system.track(pid: pid)
+        }
+        FileLog.shared.write("registry refresh apps=\(apps.count)")
+    }
+
     private func track(_ app: NSRunningApplication) {
         guard app.activationPolicy == .regular else { return }
         track(AppInfo(pid: app.processIdentifier, name: app.localizedName ?? "?", bundleID: app.bundleIdentifier))

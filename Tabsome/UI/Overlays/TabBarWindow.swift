@@ -166,6 +166,8 @@ final class TabBarWindow {
     private var burstUntil: TimeInterval = 0
     private var aboveID: CGWindowID = 0
     private var dismissing = false
+    /// The active window is on another Space, or its app is hidden (§5.8).
+    private var windowOffScreen = false
     private let actions: StripActions
     /// Left mode's rename field, attached to the right of the icon (§5.10).
     private var renamePanel: OverlayPanel?
@@ -344,8 +346,28 @@ final class TabBarWindow {
         }
     }
 
+    /// The strip shows only where its window is (§5.8). Ordered out and back in, the panels land
+    /// on the Space the user is on now, which is where the window is.
+    func setWindowOnScreen(_ onScreen: Bool) {
+        guard onScreen else {
+            guard !windowOffScreen else { return }
+            windowOffScreen = true
+            cancelPreview()
+            panel.orderOut(nil)
+            backPanel.orderOut(nil)
+            return
+        }
+        let wasOff = windowOffScreen
+        windowOffScreen = false
+        guard model.visible, !dismissing, wasOff || !panel.isOnActiveSpace else { return }
+        panel.orderOut(nil)
+        backPanel.orderOut(nil)
+        orderBoth()
+    }
+
     /// Glass directly above the window, the strip directly above the glass.
     private func orderBoth() {
+        guard !windowOffScreen else { return }
         backPanel.order(.above, relativeTo: Int(aboveID))
         panel.order(.above, relativeTo: backPanel.windowNumber)
     }

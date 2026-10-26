@@ -22,6 +22,10 @@ final class GroupManager {
     @ObservationIgnored private var tearOff: (windows: [CGWindowID], window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize)?
     /// Groups whose background tabs are tucked away while the group moves or resizes.
     @ObservationIgnored private var tucked: Set<UUID> = []
+    /// What each member did the last time it was asked for its group's frame (§5.5).
+    @ObservationIgnored private var lastFit: [CGWindowID: (requested: CGSize, landed: CGSize)] = [:]
+    /// Background tabs waiting in a corner because they'd show around the active one (§5.5).
+    @ObservationIgnored private(set) var misfitParked: Set<CGWindowID> = []
     /// Groups Tabsome is moving windows in (a merge, a new group, Fill, a placement change):
     /// frame reports from them in this window aren't the user moving the group (see `settleCheck`).
     @ObservationIgnored private var settlingUntil: [UUID: TimeInterval] = [:]
@@ -29,6 +33,8 @@ final class GroupManager {
     /// How long after Tabsome moves a group's windows their reports count as part of that move.
     @ObservationIgnored var settleDuration: TimeInterval = 1.0
     @ObservationIgnored private var workspaceObserver: NSObjectProtocol?
+    @ObservationIgnored private var systemObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var stripCheck: Timer?
     /// Apps Tabsome itself just activated: their focus events aren't the user switching tabs.
     @ObservationIgnored private var ownActivation: [pid_t: TimeInterval] = [:]
     @ObservationIgnored private let system: WindowSystem
@@ -37,6 +43,10 @@ final class GroupManager {
     @ObservationIgnored var animates = true
     /// The window server's current bounds for a window (replaced in tests).
     @ObservationIgnored var windowBounds: (CGWindowID) -> CGRect? = { ScreenWindows.bounds(of: $0) }
+    /// The windows on the current Space(s), not minimized or hidden (replaced in tests).
+    @ObservationIgnored var onScreenWindows: () -> Set<CGWindowID> = { Set(ScreenWindows.onScreen().map(\.id)) }
+    /// Every screen's usable area (replaced in tests).
+    @ObservationIgnored var usableAreas: () -> [CGRect] = { NSScreen.screens.map { ScreenGeometry.cgRect(fromAppKit: $0.visibleFrame) } }
     /// The usable area (`NSScreen.visibleFrame`) of the screen holding a rect (replaced in tests).
     @ObservationIgnored var usableArea: (CGRect) -> CGRect = { rect in
         let screen = NSScreen.screens.first { ScreenGeometry.cgRect(fromAppKit: $0.frame).contains(CGPoint(x: rect.midX, y: rect.midY)) } ?? NSScreen.screens.first
@@ -68,6 +78,22 @@ final class GroupManager {
             let pid = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
             MainActor.assumeIsolated { if let pid { self?.appActivated(pid) } }
         }
+        // §5.8: the strip follows its window across Spaces and hides with its app; a display
+        // change re-validates every group.
+        let center = NSWorkspace.shared.notificationCenter
+        let stripEvents: [Notification.Name] = [NSWorkspace.activeSpaceDidChangeNotification,
+                                                NSWorkspace.didHideApplicationNotification,
+                                                NSWorkspace.didUnhideApplicationNotification]
+        systemObservers = stripEvents.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleStripCheck() }
+            }
+        }
+        systemObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.revalidateScreens() }
+        })
     }
 
     func group(containing id: CGWindowID) -> TabGroup? { groupOf[id].flatMap { groups[$0] } }
@@ -215,7 +241,7 @@ final class GroupManager {
         g.activate(id)
         groups[gid] = g
         refreshStrip(gid)
-        activateWindow(id)
+        bringBack(id, in: g) { self.activateWindow(id) { self.conceal(gid) } }
     }
 
     /// × or middle-click: the app closes the window itself (and may ask to save). The tab goes
@@ -579,7 +605,11 @@ final class GroupManager {
 
     private func dissolve(_ gid: UUID) {
         guard let g = groups.removeValue(forKey: gid) else { return }
-        for id in g.members { groupOf[id] = nil }
+        for id in g.members {
+            groupOf[id] = nil
+            lastFit[id] = nil
+            misfitParked.remove(id)
+        }
         resyncTimers.removeValue(forKey: gid)?.invalidate()
         if let strip = strips.removeValue(forKey: gid) { strip.dismiss() }
         updateFocus()
@@ -786,9 +816,11 @@ final class GroupManager {
         guard let gid = groupOf.removeValue(forKey: id), var g = groups[gid] else { return }
         let newActive = g.remove(id)
         groups[gid] = g
+        lastFit[id] = nil
+        misfitParked.remove(id)
         if g.shouldDissolve { return dissolve(gid) }
         refreshStrip(gid)
-        if let newActive { activateWindow(newActive) }
+        if let newActive { bringBack(newActive, in: g) { self.activateWindow(newActive) { self.conceal(gid) } } }
     }
 
     private func isOwnActivation(_ pid: pid_t) -> Bool {
@@ -807,7 +839,10 @@ final class GroupManager {
     }
 
     private func appActivated(_ pid: pid_t) {
-        defer { updateFocus() }
+        defer {
+            updateFocus()
+            scheduleStripCheck()
+        }
         let own = isOwnActivation(pid)
         for (gid, g) in groups where !g.isMinimized {
             if !own, let main = registry.mainWindow[pid], g.inactive.contains(main) {
@@ -825,6 +860,101 @@ final class GroupManager {
         groups[gid] = g
         refreshStrip(gid)
         strips[gid]?.reorder(above: id)
+        bringBack(id, in: g) { self.conceal(gid) }
+    }
+
+    // MARK: Spaces, hidden apps, displays, wake (§5.8)
+
+    /// Once the window server has caught up with the change (a Space switch animates).
+    private func scheduleStripCheck() {
+        stripCheck?.invalidate()
+        stripCheck = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.revalidateStrips() }
+        }
+    }
+
+    /// A strip shows only where its active window is: it hides when the window is on another
+    /// Space or its app is hidden, and joins the window's Space when the user goes there.
+    func revalidateStrips() {
+        let onScreen = onScreenWindows()
+        for (gid, g) in groups where !g.isMinimized {
+            strips[gid]?.setWindowOnScreen(onScreen.contains(g.activeID))
+        }
+    }
+
+    /// A display was added, removed, or rearranged. A group that's no longer mostly on a screen
+    /// moves onto one (shrinking if it must); every group re-syncs, and background tabs parked
+    /// in a corner are parked again on their group's current screen.
+    func revalidateScreens() {
+        let areas = usableAreas()
+        for (gid, var g) in groups where !g.isMinimized {
+            if let outer = GroupGeometry.refitToScreens(outer: g.outer, visibleFrames: areas) {
+                FileLog.shared.write("display change: moving group=\(gid.uuidString.prefix(8)) onto a screen")
+                g.content = StripLayout.frames(outer: outer, placement: g.placement).content
+                groups[gid] = g
+            }
+            for id in g.inactive { misfitParked.remove(id) }
+            markSettling(gid)
+            strips[gid]?.place(content: g.content, above: g.activeID)
+            syncMembers(of: gid, reconcile: true) { self.scheduleSettleCheck(gid) }
+        }
+        scheduleStripCheck()
+    }
+
+    /// After wake (once the registry has re-read every app): the same checks as a display change.
+    func revalidateAll() {
+        revalidateScreens()
+    }
+
+    // MARK: Concealment (§5.5)
+
+    private func predictedSize(_ id: CGWindowID, _ g: TabGroup) -> CGSize {
+        GroupGeometry.predictedSize(for: g.content.size, last: lastFit[id])
+    }
+
+    /// A background tab that would show around the active one at the group frame: a minimum
+    /// size bigger than the group, a fixed size, or an active tab that came out smaller.
+    private func sticksOut(_ id: CGWindowID, _ g: TabGroup) -> Bool {
+        !GroupGeometry.isCovered(predictedSize(id, g), by: predictedSize(g.activeID, g))
+    }
+
+    /// A member that can't take the group frame exactly, so checking it against the frame
+    /// would only fight it.
+    private func isMisfit(_ id: CGWindowID, _ g: TabGroup) -> Bool {
+        let size = predictedSize(id, g)
+        return !ExpectedFrames.close(CGRect(origin: .zero, size: size), CGRect(origin: .zero, size: g.content.size))
+    }
+
+    private func recordFit(_ id: CGWindowID, requested: CGSize, landed: CGRect?) {
+        if let landed { lastFit[id] = (requested, landed.size) }
+    }
+
+    /// Background tabs stay stacked behind the active window when it covers them; ones that
+    /// would show around it wait in a screen corner (AeroSpace's way) until they're activated.
+    private func conceal(_ gid: UUID) {
+        guard let g = groups[gid], !g.isMinimized, !tucked.contains(gid) else { return }
+        misfitParked.remove(g.activeID)
+        for id in g.inactive {
+            if sticksOut(id, g) {
+                guard !misfitParked.contains(id) else { continue }
+                FileLog.shared.write("conceal: window=\(id) can't hide behind the active tab; parking it")
+                misfitParked.insert(id)
+                park(id, from: g)
+            } else if misfitParked.remove(id) != nil {
+                let size = g.content.size
+                setFrame(id, g.content) { self.recordFit(id, requested: size, landed: $0) }
+            }
+        }
+    }
+
+    /// A tab coming forward from its corner goes back to the group frame first.
+    private func bringBack(_ id: CGWindowID, in g: TabGroup, then: @escaping () -> Void) {
+        guard misfitParked.remove(id) != nil else { return then() }
+        let size = g.content.size
+        setFrame(id, g.content) { landed in
+            self.recordFit(id, requested: size, landed: landed)
+            then()
+        }
     }
 
     // MARK: Frame sync (FrameSync, P3, P5)
@@ -882,7 +1012,7 @@ final class GroupManager {
     /// Phase 4: one window of a multi-tab merge could be left outside the group).
     func settleCheck(_ gid: UUID) {
         guard let g = groups[gid], !g.isMinimized, !tucked.contains(gid), liveDrag?.group != gid, stripDrag?.group != gid else { return }
-        for id in g.members {
+        for id in g.members where !misfitParked.contains(id) && !isMisfit(id, g) {
             guard let actual = windowBounds(id) ?? registry.windows[id]?.window.frame else { continue }
             if !ExpectedFrames.close(actual, g.content) {
                 FileLog.shared.write("settle: window=\(id) was off the group frame; putting it back")
@@ -911,21 +1041,35 @@ final class GroupManager {
         tucked.remove(gid)
         guard let g = groups[gid] else { then?(); return }
         let requested = g.content
+        // Background tabs known to show around the active one stay in their corner (§5.5).
         let members = g.members.filter { id in
             guard id != skipped, let f = registry.windows[id]?.window.frame else { return false }
+            if id != g.activeID, sticksOut(id, g) { return false }
             return f != requested || !reconcile
         }
-        guard !members.isEmpty else { then?(); return }
+        let finish = {
+            self.conceal(gid)
+            then?()
+        }
+        guard !members.isEmpty else { return finish() }
         var landed: [CGRect] = []
         var remaining = members.count
         for id in members {
             setFrame(id, requested) { frame in
                 if let frame { landed.append(frame) }
+                self.recordFit(id, requested: requested.size, landed: frame)
                 remaining -= 1
                 guard remaining == 0 else { return }
-                guard reconcile, var g = self.groups[gid], g.content == requested else { then?(); return }
-                let strict = GroupGeometry.reconcile(requested: requested, landed: landed)
-                guard strict != requested else { then?(); return }
+                guard reconcile, var g = self.groups[gid], g.content == requested else { return finish() }
+                var strict = GroupGeometry.reconcile(requested: requested, landed: landed)
+                guard strict != requested else { return finish() }
+                if strict.width > requested.width || strict.height > requested.height {
+                    // Grown to fit a member's minimum size: still on screen, strip included.
+                    let outer = StripLayout.outer(content: strict, placement: g.placement)
+                    let fitted = GroupGeometry.keepOnScreen(outer, visibleFrame: self.visibleFrame(containing: outer))
+                    strict = StripLayout.frames(outer: fitted, placement: g.placement).content
+                    FileLog.shared.write("group=\(gid.uuidString.prefix(8)) grew to \(Int(strict.width))x\(Int(strict.height)) to fit a member's minimum size")
+                }
                 g.content = strict
                 self.groups[gid] = g
                 self.strips[gid]?.place(content: strict, above: g.activeID)

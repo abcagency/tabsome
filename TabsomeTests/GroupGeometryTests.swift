@@ -11,10 +11,23 @@ struct GroupGeometryTests {
         #expect(GroupGeometry.reconcile(requested: requested, landed: landed) == CGRect(x: 100, y: 132, width: 798, height: 563))
     }
 
-    @Test func ignoresMisfitsFarFromTheRequest() {
-        // A minimum height far bigger than the group: Phase 5 parks it; it doesn't resize the group.
-        let landed = [requested, CGRect(x: 100, y: 132, width: 800, height: 700)]
+    @Test func growsToAMemberThatCantGetSmallEnough() {
+        // Notes' minimum height is bigger than the group: the group takes it.
+        let landed = [requested, CGRect(x: 100, y: 132, width: 798, height: 700)]
+        #expect(GroupGeometry.reconcile(requested: requested, landed: landed) == CGRect(x: 100, y: 132, width: 800, height: 700))
+    }
+
+    @Test func aMemberThatCantGetBigEnoughDoesntShrinkTheGroup() {
+        // A fixed-size window far smaller than the group: concealment's job, not the group's.
+        let landed = [requested, CGRect(x: 100, y: 132, width: 500, height: 400)]
         #expect(GroupGeometry.reconcile(requested: requested, landed: landed) == requested)
+    }
+
+    @Test func aGrownGroupStaysOnScreen() {
+        let v = CGRect(x: 0, y: 25, width: 1600, height: 1000)
+        #expect(GroupGeometry.keepOnScreen(CGRect(x: 100, y: 600, width: 800, height: 700), visibleFrame: v) == CGRect(x: 100, y: 325, width: 800, height: 700))
+        #expect(GroupGeometry.keepOnScreen(CGRect(x: 100, y: 100, width: 800, height: 600), visibleFrame: v) == CGRect(x: 100, y: 100, width: 800, height: 600))
+        #expect(GroupGeometry.keepOnScreen(CGRect(x: 100, y: 100, width: 2000, height: 600), visibleFrame: v).minX == 0)
     }
 
     @Test func fillThenReturn() {
