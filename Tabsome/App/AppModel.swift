@@ -70,6 +70,7 @@ final class AppModel {
     }
 
     static let stripSizeKey = "stripSize", minTabWidthKey = "minTabWidth", showCloseButtonsKey = "showCloseButtons"
+    static let showBadgesKey = "showAppBadges"
     /// Settings › Tabs: strip size, tab min width, and close buttons. Applies to every group live.
     var stripOptions: StripOptions {
         didSet {
@@ -77,6 +78,7 @@ final class AppModel {
             d.set(stripOptions.size.rawValue, forKey: Self.stripSizeKey)
             d.set(Double(stripOptions.minTabWidth), forKey: Self.minTabWidthKey)
             d.set(stripOptions.showsCloseButtons, forKey: Self.showCloseButtonsKey)
+            d.set(stripOptions.showsBadges, forKey: Self.showBadgesKey)
             groups.setStripOptions(stripOptions)
         }
     }
@@ -88,6 +90,7 @@ final class AppModel {
             o.minTabWidth = min(max(CGFloat(d.double(forKey: minTabWidthKey)), StripOptions.minTabWidthRange.lowerBound), StripOptions.minTabWidthRange.upperBound)
         }
         if d.object(forKey: showCloseButtonsKey) != nil { o.showsCloseButtons = d.bool(forKey: showCloseButtonsKey) }
+        if d.object(forKey: showBadgesKey) != nil { o.showsBadges = d.bool(forKey: showBadgesKey) }
         return o
     }
 
@@ -109,6 +112,7 @@ final class AppModel {
         let zone = defaults.object(forKey: Self.middleZoneKey) as? Double ?? 1 - 2 * DropZone.defaultInset
         middleZone = min(max(zone, Self.middleZoneRange.lowerBound), Self.middleZoneRange.upperBound)
         stripOptions = Self.savedStripOptions(defaults)
+        groups.badges.source = DockBadgeReader()
         groups.setStripOptions(stripOptions)
         groups.setPlacement(tabPlacement)
         drag.dwellDelay = dwellDelay

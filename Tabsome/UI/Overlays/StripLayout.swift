@@ -31,6 +31,8 @@ nonisolated struct StripOptions: Equatable, Sendable {
     /// Top mode: below this width, tabs drop their names and show only icons.
     var minTabWidth: CGFloat = 90
     var showsCloseButtons = true
+    /// App badges on tabs (§5.14).
+    var showsBadges = true
 
     static let minTabWidthRange: ClosedRange<CGFloat> = 60...200
 }

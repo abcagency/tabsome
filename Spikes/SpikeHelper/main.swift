@@ -3,6 +3,8 @@
 //                          and a drag source that drags a file (spike 9)
 //   role "sink":           two stacked windows; the lower one ("SINK") accepts file drops (spike 9)
 //   role "quiet":          one small window, never activates (the Phase 5d leak test, launched hidden)
+//   role "badge":          one window and a Dock badge; post com.tabsome.spikehelper.badge with the
+//                          text as the object to change it ("" clears it) (Phase 6b)
 // Controlled by distributed notifications so the spike app needs no extra permissions.
 
 import AppKit
@@ -77,6 +79,18 @@ final class SinkView: NSView {
 final class HelperDelegate: NSObject, NSApplicationDelegate {
     var windows: [NSWindow] = []
     func applicationDidFinishLaunching(_ n: Notification) {
+        if role == "badge" {
+            let w = makeWindow("BADGE", nsRect(160, 200, 640, 400), color: .systemRed.withAlphaComponent(0.25))
+            w.orderFront(nil)
+            windows = [w]
+            NSApp.dockTile.badgeLabel = "3"
+            DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.spikehelper.badge"), object: nil, queue: .main) { n in
+                let text = n.object as? String ?? ""
+                NSApp.dockTile.badgeLabel = text.isEmpty ? nil : text
+                hlog("badge \(text.isEmpty ? "cleared" : text)")
+            }
+            return hlog("ready pid \(getpid())")
+        }
         if role == "quiet" {
             let w = makeWindow("LEAK TEST", nsRect(40, 600, 220, 140), color: .systemGray.withAlphaComponent(0.3))
             w.orderFront(nil)

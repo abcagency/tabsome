@@ -204,6 +204,10 @@ private struct StripTab: View {
                 closeButton // narrow tabs: the active one trades its icon for × on hover (Chrome)
             } else if let icon = NSRunningApplication(processIdentifier: tab.pid)?.icon {
                 Image(nsImage: icon).resizable().frame(width: 16, height: 16)
+                    // Icon-only tabs: the badge sits on the icon's corner, like the Dock.
+                    .overlay(alignment: .topTrailing) {
+                        if style == .iconOnly, let badge = tab.badge { BadgePill(text: badge, compact: true).offset(x: 6, y: -5) }
+                    }
             }
             if style == .full, !isRenaming {
                 Text(tab.label)
@@ -211,6 +215,8 @@ private struct StripTab: View {
                     .foregroundStyle(tab.isActive ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .layoutPriority(-1)
+                if let badge = tab.badge { BadgePill(text: badge) }
                 Spacer(minLength: 0)
                 // Chrome's rule: always on the active tab, on hover for the others.
                 if model.options.showsCloseButtons {
@@ -261,6 +267,7 @@ private struct StripTab: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(tab.label)
+        .accessibilityValue(tab.badge.map { "Badge: \($0)" } ?? "")
         .accessibilityAddTraits(tab.isActive ? [.isSelected, .isButton] : .isButton)
     }
 
@@ -279,5 +286,25 @@ private struct StripTab: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .accessibilityLabel("Close \(tab.label)")
+    }
+}
+
+/// An app's Dock badge on its tab (PLAN.md §5.14): the Dock's red, with white text. `compact`
+/// is the smaller one on an icon's corner.
+struct BadgePill: View {
+    let text: String
+    var compact = false
+
+    var body: some View {
+        Text(AppBadges.display(text, compact: compact))
+            .font(.system(size: compact ? 9 : 10, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, compact ? 3 : 5)
+            .frame(minWidth: compact ? 13 : 16, minHeight: compact ? 13 : 16)
+            .background(Capsule().fill(Color(nsColor: .systemRed)))
+            .accessibilityHidden(true)
     }
 }

@@ -10,6 +10,8 @@ struct TabItem: Identifiable, Equatable {
     let title: String?
     let isActive: Bool
     var isRenamed = false
+    /// The app's Dock badge (§5.14), shared by every tab from that app.
+    var badge: String?
 }
 
 /// A window the "+" menu offers (PLAN.md §5.6).

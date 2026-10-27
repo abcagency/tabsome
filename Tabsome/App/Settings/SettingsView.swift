@@ -305,6 +305,13 @@ struct TabsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Show app badges on tabs", isOn: $model.stripOptions.showsBadges)
+            } footer: {
+                Text("When an app shows a badge on its Dock icon, such as Mail’s unread count, its tabs show it too.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Show previews when hovering tabs", isOn: $showsPreviews)
             } footer: {
                 Text(CGPreflightScreenCaptureAccess()

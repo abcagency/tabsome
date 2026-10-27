@@ -484,7 +484,7 @@ Three more behaviors borrowed from Safari, Chrome, and Finder.
   - **Top mode:** a small red pill after the tab's name.
   - **Left mode:** a red badge on the icon's top-right corner, like the Dock.
 - Badges belong to the app, not to one window, so every tab from that app shows the same badge.
-- **How:** the Dock's own items expose their badge text through Accessibility (the status label of each Dock item). macOS sends no notification when a badge changes, so this is the one place Tabsome checks on a timer: **every 3 seconds, only while at least one group exists, on a background thread, reading only the Dock's item list** (a single call). The timer stops when the last group dissolves. This is a deliberate, narrow exception to the "no polling" rule (§6.2 P2) and the "window attributes only" rule (§6.1 S1).
+- **How:** the Dock's own items expose their badge text through Accessibility (the status label of each Dock item). macOS sends no notification when a badge changes, so this is the one place Tabsome checks on a timer: **every 3 seconds, only while at least one group exists, on a background thread, reading only the Dock's item list** (one call for the list, then one for each item's kind, bundle, name, and badge). The timer stops when the last group dissolves. This is a deliberate, narrow exception to the "no polling" rule (§6.2 P2) and the "window attributes only" rule (§6.1 S1).
 - Settings › Tabs › "Show app badges on tabs" (on by default).
 
 **3. Hover previews**
@@ -925,6 +925,21 @@ Check for Updates… and Report a Problem… stay in Phase 7 with Sparkle and th
 Found and fixed during the hand check: adding a small window (Finder) to a big group (Safari) showed the small snapshot stretched up to the group's size for the whole spring, then swapped it. The proxy now cross-fades to a snapshot at the final size as soon as one arrives, while the spring is still running (§5.9 step 4: the window has already landed behind the cover, so it can be captured at once). The size spring no longer bounces, so the picture doesn't overshoot its final size.
 
 Checked by script: every strip size in Top, Left, and Left with names, on a real group. 192 unit tests in total. The new ones cover each size's thickness and frame round trip, Medium matching the measured metrics, the tab min width deciding when names give way to icons, and the middle-zone size.
+
+**6b (2026-10-27): done.** Checked by hand with real Dock badges in every strip style, and the setting. App badges on tabs (§5.14):
+- **Where badges come from:** `Core/AX/DockBadges.swift`, the one file besides `AXWindow` and `AXApp` allowed to call AX (the S1 check already named it). It reads the Dock's app items on its own thread with the usual 0.5 s timeout: one call for the item list, then one per item for its kind, bundle, name, and badge. Nothing else is read from the Dock or any other app, and badge text is never logged.
+- **When:** `BadgeMonitor` reads once as soon as the first group forms, then every 3 seconds, and stops when the last group goes or the setting is turned off. A read only redraws the strips when something changed.
+- **Matching:** a Dock item belongs to an app by its bundle's location (by name only for an item with no URL). Every tab from that app shows the badge. Two running copies of the same app share one Dock item as far as Tabsome can tell, so they show the same badge.
+- **Look:** the Dock's red with white text.
+  - Top: a pill after the tab's name, or on the icon's corner when tabs are icon-only.
+  - Left: on the icon's top-right corner, like the Dock; × takes its place on hover.
+  - Left with names: a pill before the ×.
+  - Big counts show as "9999+" in a pill and "99+" on an icon, never as a cut-off number. Other long text gets an ellipsis.
+  - VoiceOver reads it as the tab's value ("Badge: 3").
+- **Settings › Tabs › Show app badges on tabs** (on by default).
+- SpikeHelper gained a `badge` role: one window with a Dock badge, changed by a distributed notification.
+
+Checked by script: a real Dock badge reaches the tabs in Top, Left, and Left with names, changes within 3 s, clears, and caps. With a group open, Tabsome used about 20 ms of CPU in 30 s. 199 unit tests in total. The new ones cover matching Dock items to apps, capping long badges, the monitor reading at once and then on its timer, and the Dock being read only while a group exists.
 
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).

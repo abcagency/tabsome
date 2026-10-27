@@ -8,8 +8,14 @@ import CoreGraphics
 @Observable
 final class GroupManager {
     private(set) var groups: [UUID: TabGroup] = [:] {
-        didSet { scheduleRecoverySave() }
+        didSet {
+            scheduleRecoverySave()
+            updateBadgeMonitor()
+        }
     }
+
+    /// App badges on tabs (§5.14): the Dock is read only while a group exists.
+    @ObservationIgnored let badges = BadgeMonitor()
 
     @ObservationIgnored private var groupOf: [CGWindowID: UUID] = [:]
     @ObservationIgnored private var strips: [UUID: TabBarWindow] = [:]
@@ -78,6 +84,10 @@ final class GroupManager {
         }
         registry.onWindowRemoved = { [weak self] id, _ in self?.windowRemoved(id) }
         registry.onMainWindowChanged = { [weak self] pid, id in self?.mainWindowChanged(pid: pid, id: id) }
+        badges.onChange = { [weak self] _ in
+            guard let self else { return }
+            for gid in self.groups.keys { self.refreshStrip(gid) }
+        }
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] n in
@@ -228,6 +238,14 @@ final class GroupManager {
             StripLayout.options = new
         }
         for strip in strips.values { strip.options = new }
+        if new.showsBadges != old.showsBadges {
+            updateBadgeMonitor()
+            for gid in groups.keys { refreshStrip(gid) }
+        }
+    }
+
+    private func updateBadgeMonitor() {
+        badges.isActive = !groups.isEmpty && StripLayout.options.showsBadges
     }
 
     /// Applies a change to the strip's side or thickness: each group keeps its outer frame and
@@ -1215,12 +1233,24 @@ final class GroupManager {
         return strip
     }
 
+    /// The Dock's badge for each app among these tabs (§5.14).
+    private func appBadges(for entries: [WindowRegistry.Entry]) -> [pid_t: String] {
+        guard StripLayout.options.showsBadges, !badges.items.isEmpty else { return [:] }
+        var apps: [pid_t: AppBadges.App] = [:]
+        for e in entries where apps[e.app.pid] == nil {
+            apps[e.app.pid] = AppBadges.App(pid: e.app.pid, bundleURL: NSRunningApplication(processIdentifier: e.app.pid)?.bundleURL, name: e.app.name)
+        }
+        return AppBadges.badges(items: badges.items, apps: Array(apps.values))
+    }
+
     private func refreshStrip(_ gid: UUID) {
         guard let g = groups[gid], let strip = strips[gid] else { return }
         let entries = g.members.compactMap { registry.windows[$0] }
+        let badge = appBadges(for: entries)
         let tabs = entries.map { e in
             TabItem(id: e.id, label: TabLabel.label(for: e, among: entries, customName: registry.customNames[e.id]), pid: e.app.pid,
-                    title: e.window.title, isActive: e.id == g.activeID, isRenamed: registry.customNames[e.id] != nil)
+                    title: e.window.title, isActive: e.id == g.activeID, isRenamed: registry.customNames[e.id] != nil,
+                    badge: badge[e.app.pid])
         }
         let focused = registry.windows[g.activeID].map { NSWorkspace.shared.frontmostApplication?.processIdentifier == $0.app.pid } ?? false
         strip.update(tabs: tabs, focused: focused)

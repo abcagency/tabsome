@@ -174,6 +174,13 @@ private struct LeftTab: View {
                     .frame(width: StripLayout.leftIconSize(model.options.size), height: StripLayout.leftIconSize(model.options.size))
                     .opacity(tab.isActive || hovered ? 1 : 0.75)
             }
+            // The badge sits on the icon's corner like the Dock's; × takes its place on hover.
+            if let badge = tab.badge, !(hovered && model.options.showsCloseButtons) {
+                BadgePill(text: badge, compact: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(2)
+                    .transition(.opacity)
+            }
             if hovered, model.options.showsCloseButtons {
                 Button { actions.close(tab.id) } label: {
                     Image(systemName: "xmark")
@@ -224,7 +231,9 @@ private struct NamedLeftTab: View {
                     .foregroundStyle(tab.isActive ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .layoutPriority(-1)
                 Spacer(minLength: 0)
+                if let badge = tab.badge { BadgePill(text: badge) }
                 if model.options.showsCloseButtons {
                     Button { actions.close(tab.id) } label: {
                         Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16).contentShape(Rectangle())
@@ -291,6 +300,7 @@ private struct LeftTabMenu: ViewModifier {
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel(tab.label)
+            .accessibilityValue(tab.badge.map { "Badge: \($0)" } ?? "")
             .accessibilityAddTraits(tab.isActive ? [.isSelected, .isButton] : .isButton)
     }
 }
