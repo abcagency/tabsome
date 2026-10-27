@@ -41,4 +41,10 @@ final class OverlayPanel: NSPanel {
 
     override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
+
+    /// VoiceOver: a floating window, not the "system dialog" AppKit reports for a borderless
+    /// non-activating panel. Panels with nothing to read (glass, highlight, proxies, the hint)
+    /// are left out entirely.
+    override func accessibilitySubrole() -> NSAccessibility.Subrole? { .floatingWindow }
+    override func isAccessibilityElement() -> Bool { ignoresMouseEvents ? false : super.isAccessibilityElement() }
 }

@@ -948,6 +948,18 @@ Checked by script: a real Dock badge reaches the tabs in Top, Left, and Left wit
 
 Checked by script: both panes fit without scrolling. 203 unit tests in total. The new ones cover the default layout, every action having its own title and keys, and conflicts between actions.
 
+**6d (2026-10-27): done.** Checked by hand: the hint (and that it retires after two groups), and the strips with VoiceOver.
+- **First-time hint:** while a window is dragged by its title bar over another window's middle, a small glass label by the cursor says "Pause to make tabs", then "Let go to make tabs" once the highlight shows. It never shows over a tab strip (the insertion marker says enough) or for torn-out tabs. Every drop into a window or strip counts; after two, it's gone for good (`hintGroupsMade` in UserDefaults).
+- **VoiceOver on the strips:**
+  - The strip window is a floating window titled "Tabs" (AppKit called it a "system dialog"), holding one "Tabs" group whose actions are Close All Tabs, Minimize, and Fill (Left mode has no buttons for these).
+  - Each tab is one element: its label, "2 of 5" (plus ", badge 3"), selected when active, and the window's title as the hint. Pressing it switches to it.
+  - Each tab's actions: Close Tab, Close Other Tabs, Move Tab Left/Right (Up/Down in Left mode), Move Tab to New Window, and Rename Tab. So nothing needs a drag or a right-click, which also covers reordering from the keyboard.
+  - The + and » menus read as "Add a Window as a Tab" and "More Tabs". The glass panel, the insertion marker, the hint, the highlight, proxies, and decorative icons are hidden from VoiceOver.
+- **Keyboard:** the tab shortcuts (6c) cover switching, closing, moving out, and renaming. Neither Safari nor Chrome on the Mac has default keys for reordering tabs, so there are no new global shortcuts; VoiceOver's actions cover it. Settings and onboarding use standard controls, which Full Keyboard Access already reaches.
+- The spikes app gained `axdump`, which prints an app's accessibility tree, and `axdump <app> press <label> [n] [action]`.
+
+Checked by script: the accessibility tree in Top and Left, pressing a tab through accessibility to switch, and Move Tab Right. 207 unit tests in total. The new ones cover when the hint shows and what it says, and the tab's VoiceOver value.
+
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
 - Developer ID signing, notarization (`notarytool`), and a stapled DMG (`create-dmg`).

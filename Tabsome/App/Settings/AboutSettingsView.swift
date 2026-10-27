@@ -17,6 +17,7 @@ struct AboutSettingsView: View {
                     Image(nsImage: NSApp.applicationIconImage)
                         .resizable()
                         .frame(width: 96, height: 96)
+                        .accessibilityHidden(true)
                     Text(Brand.name).font(.title2.bold())
                     Text(version).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("Tabs for any window, from any app.")

@@ -35,6 +35,7 @@ struct LeftStripView: View {
                         Button("Minimize") { actions.minimize() }
                         Button("Fill") { actions.fill() }
                     }
+                    .accessibilityHidden(true) // the "Tabs" group carries these actions
 
                 ForEach(Array(layout.visible.enumerated()), id: \.element) { slot, index in
                     let tab = model.tabs[index]
@@ -63,6 +64,7 @@ struct LeftStripView: View {
                         .frame(width: w, height: 3)
                         .offset(x: 7, y: y - 1.5)
                         .transition(.opacity)
+                        .accessibilityHidden(true)
                 }
 
                 if let frame = layout.overflowButton {
@@ -70,7 +72,7 @@ struct LeftStripView: View {
                         ForEach(layout.overflow, id: \.self) { i in
                             Button(model.tabs[i].label) { actions.activate(model.tabs[i].id) }
                         }
-                    } label: { Image(systemName: "chevron.down.2") }
+                    } label: { Image(systemName: "chevron.down.2").accessibilityLabel("More Tabs") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden)
                         .frame(width: frame.width, height: frame.height).offset(y: frame.minY)
                         .help("More Tabs")
@@ -84,7 +86,7 @@ struct LeftStripView: View {
                                 Label { Text(c.menuTitle) } icon: { Image(nsImage: menuIcon(c.pid)) }
                             }
                         }
-                    } label: { Image(systemName: "plus") }
+                    } label: { Image(systemName: "plus").accessibilityLabel("Add a Window as a Tab") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden)
                         .frame(width: frame.width, height: frame.height).offset(y: frame.minY)
                         .help("Add a Window as a Tab")
@@ -298,10 +300,7 @@ private struct LeftTabMenu: ViewModifier {
                 Button("Rename Tab…") { model.beginRename(tab.id) }
                 if tab.isRenamed { Button("Reset Name") { actions.rename(tab.id, nil, true) } }
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(tab.label)
-            .accessibilityValue(tab.badge.map { "Badge: \($0)" } ?? "")
-            .accessibilityAddTraits(tab.isActive ? [.isSelected, .isButton] : .isButton)
+            .modifier(TabAccessibility(tab: tab, model: model, actions: actions, vertical: true))
     }
 }
 

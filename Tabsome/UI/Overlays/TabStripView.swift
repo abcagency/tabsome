@@ -59,6 +59,7 @@ struct TabStripView: View {
                         .frame(width: 3, height: 22)
                         .offset(x: x - 1.5, y: (StripLayout.thickness(.top, size: model.options.size) - 22) / 2)
                         .transition(.opacity)
+                        .accessibilityHidden(true)
                 }
 
                 if let frame = layout.overflowButton {
@@ -66,7 +67,7 @@ struct TabStripView: View {
                         ForEach(layout.overflow, id: \.self) { i in
                             Button(model.tabs[i].label) { actions.activate(model.tabs[i].id) }
                         }
-                    } label: { Image(systemName: "chevron.right.2") }
+                    } label: { Image(systemName: "chevron.right.2").accessibilityLabel("More Tabs") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden)
                         .frame(width: frame.width, height: frame.height).offset(x: frame.minX)
                         .help("More Tabs")
@@ -80,7 +81,7 @@ struct TabStripView: View {
                                 Label { Text(c.menuTitle) } icon: { Image(nsImage: menuIcon(c.pid)) }
                             }
                         }
-                    } label: { Image(systemName: "plus") }
+                    } label: { Image(systemName: "plus").accessibilityLabel("Add a Window as a Tab") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden)
                         .frame(width: frame.width, height: frame.height).offset(x: frame.minX)
                         .help("Add a Window as a Tab")
@@ -265,10 +266,7 @@ private struct StripTab: View {
             Button("Rename Tab…") { model.beginRename(tab.id) }
             if tab.isRenamed { Button("Reset Name") { actions.rename(tab.id, nil, true) } }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(tab.label)
-        .accessibilityValue(tab.badge.map { "Badge: \($0)" } ?? "")
-        .accessibilityAddTraits(tab.isActive ? [.isSelected, .isButton] : .isButton)
+        .modifier(TabAccessibility(tab: tab, model: model, actions: actions, vertical: false))
     }
 
     /// The label becomes a field at the same font and place (§5.10).
@@ -306,5 +304,45 @@ struct BadgePill: View {
             .frame(minWidth: compact ? 13 : 16, minHeight: compact ? 13 : 16)
             .background(Capsule().fill(Color(nsColor: .systemRed)))
             .accessibilityHidden(true)
+    }
+}
+
+/// VoiceOver (PLAN.md §7 Phase 6): each tab is one element ("Safari, 2 of 5", selected when
+/// it's active), pressing it switches to it, and every tab action is a VoiceOver action, so
+/// nothing needs a drag or a right-click. The window's title is the hint.
+struct TabAccessibility: ViewModifier {
+    let tab: TabItem
+    let model: TabStripModel
+    let actions: StripActions
+    /// Left mode: "up" and "down" instead of "left" and "right".
+    let vertical: Bool
+
+    func body(content: Content) -> some View {
+        let index = model.tabs.firstIndex { $0.id == tab.id } ?? 0
+        let count = model.tabs.count
+        content
+            // While renaming, the text field inside stays reachable.
+            .accessibilityElement(children: model.renaming == tab.id ? .contain : .ignore)
+            .accessibilityLabel(tab.label)
+            .accessibilityValue(Self.value(index: index, count: count, badge: tab.badge))
+            .accessibilityHint(tab.title ?? "")
+            .accessibilityAddTraits(tab.isActive ? [.isSelected, .isButton] : .isButton)
+            .accessibilityAction { actions.activate(tab.id) }
+            // Listed last to first: VoiceOver's actions menu shows them in reverse, so this reads
+            // Close Tab, Close Other Tabs, Move…, Rename Tab.
+            .accessibilityActions {
+                Button("Rename Tab") { model.beginRename(tab.id) }
+                Button("Move Tab to New Window") { actions.moveToNewWindow([tab.id], tab.id) }
+                if index < count - 1 { Button(vertical ? "Move Tab Down" : "Move Tab Right") { actions.reorder(tab.id, index + 1) } }
+                if index > 0 { Button(vertical ? "Move Tab Up" : "Move Tab Left") { actions.reorder(tab.id, index - 1) } }
+                if count > 1 { Button("Close Other Tabs") { actions.closeOthers(tab.id) } }
+                Button("Close Tab") { actions.close(tab.id) }
+            }
+    }
+
+    /// "2 of 5", then the app's badge if it has one.
+    nonisolated static func value(index: Int, count: Int, badge: String?) -> String {
+        let position = "\(index + 1) of \(count)"
+        return badge.map { "\(position), badge \($0)" } ?? position
     }
 }

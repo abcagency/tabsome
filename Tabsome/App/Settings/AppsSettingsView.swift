@@ -98,6 +98,7 @@ private struct ExcludedAppRow: View {
             Image(nsImage: url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSWorkspace.shared.icon(for: .application))
                 .resizable()
                 .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
             Text(url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleID)
         }
         .padding(.vertical, 1)

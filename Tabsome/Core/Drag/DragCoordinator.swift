@@ -13,6 +13,7 @@ final class DragCoordinator {
     private let groups: GroupManager
     private let monitor = DragMonitor()
     private let highlight = DropHighlightWindow()
+    private let hint = HintWindow()
     private var dwell = DwellStateMachine()
     private let ownPID = ProcessInfo.processInfo.processIdentifier
 
@@ -149,6 +150,16 @@ final class DragCoordinator {
         p.lastTarget = resolved
         press = p
         perform(dwell.update(cursor: point, time: now, target: resolved?.dwellTarget))
+        updateHint()
+    }
+
+    /// The first-time hint follows the dwell: "pause" while hovering, "let go" once armed.
+    /// Only for windows dragged by the title bar; torn-out tabs are already tabs.
+    private func updateHint() {
+        let groupsMade = UserDefaults.standard.integer(forKey: FirstTimeHint.groupsMadeKey)
+        guard let p = press, p.dragging, !p.source.isTab,
+              let text = FirstTimeHint.text(for: dwell.state, groupsMade: groupsMade) else { return hint.hide() }
+        hint.show(text, at: lastCursor)
     }
 
     private func released() {
@@ -171,6 +182,7 @@ final class DragCoordinator {
 
     private func endPress(cancel: Bool) {
         if cancel { perform(dwell.cancel()) }
+        hint.hide()
         press = nil
         trailingResolve?.invalidate()
         tickTimer?.invalidate()
@@ -201,6 +213,7 @@ final class DragCoordinator {
                     MainActor.assumeIsolated {
                         guard let self else { return }
                         self.perform(self.dwell.tick(time: ProcessInfo.processInfo.systemUptime))
+                        self.updateHint()
                     }
                 }
             case .showHighlight(let target):
@@ -226,6 +239,9 @@ final class DragCoordinator {
 
     private func drop(_ p: Press, into target: CGWindowID, at index: Int?) {
         let image = snapshot?.window == p.window ? snapshot?.image : nil
+        // Counts toward retiring the first-time hint (§7 Phase 6).
+        let defaults = UserDefaults.standard
+        defaults.set(defaults.integer(forKey: FirstTimeHint.groupsMadeKey) + 1, forKey: FirstTimeHint.groupsMadeKey)
         let frame = ScreenWindows.bounds(of: p.window)
         if case .groupWindow(let gid) = p.source {
             groups.mergeGroup(gid, into: target, at: index, dropFrame: frame, snapshot: image)

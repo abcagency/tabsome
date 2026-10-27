@@ -195,6 +195,7 @@ final class TabBarWindow {
         self.actions = actions
         let host = StripHostingView(model: model, actions: actions)
         panel.setHostedContent(host)
+        panel.setAccessibilityTitle("Tabs")
         let back = NSHostingView(rootView: StripBackground(model: model))
         back.sizingOptions = []
         backPanel.setHostedContent(back)
@@ -560,6 +561,15 @@ struct StripRootView: View {
             }
         }
         .modifier(StripAppearance(model: model))
+        // VoiceOver: one "Tabs" group holding the tabs, with the group's own actions (in Left
+        // mode, these have no buttons; they're in the column's right-click menu).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Tabs")
+        .accessibilityActions { // in reverse, like the tabs' (see `TabAccessibility`)
+            Button("Fill") { actions.fill() }
+            Button("Minimize") { actions.minimize() }
+            Button("Close All Tabs") { actions.closeAll() }
+        }
     }
 }
 
@@ -572,6 +582,7 @@ struct StripBackground: View {
         shape.fill(.clear).glassEffect(.regular, in: shape)
             .modifier(StripAppearance(model: model))
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
