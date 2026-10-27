@@ -102,7 +102,7 @@ struct DebugSettingsHook: ViewModifier {
 
     func body(content: Content) -> some View {
         content.onReceive(DistributedNotificationCenter.default().publisher(for: .init("com.tabsome.debug.settings"))) { note in
-            // The notification's object names a pane to show ("general", "tabs", "apps", "about").
+            // The notification's object names a pane to show ("general", "tabs", "apps", "shortcuts", "about").
             if let pane = note.object as? String { UserDefaults.standard.set(pane, forKey: SettingsView.paneKey) }
             NSApp.activate()
             openSettings()

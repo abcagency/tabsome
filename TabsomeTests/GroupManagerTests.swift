@@ -329,8 +329,7 @@ struct GroupManagerPhase4bTests {
     }
 
     @Test func everyShortcutHasItsOwnKeyCombination() {
-        let combos = HotKeys.bindings.map { "\($0.1)-\($0.2)" }
+        let combos = HotKeys.Action.allCases.map(\.initial)
         #expect(Set(combos).count == combos.count)
-        #expect(HotKeys.bindings.count == HotKeys.Action.allCases.count)
     }
 }

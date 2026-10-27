@@ -1,70 +1,88 @@
-import Carbon
-import Foundation
+import AppKit
+import KeyboardShortcuts
 
 /// The browser-layout shortcuts (PLAN.md §5.7), with ⌃⌥ in place of ⌘/⌃ so they never collide
-/// with apps' own. `RegisterEventHotKey` needs no Input Monitoring permission, and Tabsome never
-/// sees other keystrokes (S5). They're registered only while a group is focused, so the same
-/// keys reach other apps the rest of the time. Settings › Shortcuts makes them rebindable (Phase 6).
+/// with apps' own. KeyboardShortcuts registers them with Carbon's `RegisterEventHotKey`, which
+/// needs no Input Monitoring permission, and Tabsome never sees other keystrokes (S5). They're
+/// registered only while a group is focused, so the same keys reach other apps the rest of the
+/// time. Settings › Shortcuts rebinds them; KeyboardShortcuts keeps the choices in UserDefaults.
 @MainActor
 final class HotKeys {
     enum Action: UInt32, CaseIterable {
         case next = 1, previous
         case tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8
         case last, close, moveToNewWindow, rename
+
+        var name: KeyboardShortcuts.Name { Self.names[self]! }
+
+        /// What Settings › Shortcuts calls it.
+        var title: String {
+            switch self {
+            case .next: "Next Tab"
+            case .previous: "Previous Tab"
+            case .tab1, .tab2, .tab3, .tab4, .tab5, .tab6, .tab7, .tab8: "Tab \(rawValue - Self.tab1.rawValue + 1)"
+            case .last: "Last Tab"
+            case .close: "Close Tab"
+            case .moveToNewWindow: "Move Tab to New Window"
+            case .rename: "Rename Tab"
+            }
+        }
+
+        /// The browser layout: ⌃Tab and ⌘1–9 become ⌃⌥Tab and ⌃⌥1–9, and so on.
+        var initial: KeyboardShortcuts.Shortcut {
+            let co: NSEvent.ModifierFlags = [.control, .option]
+            let digits: [KeyboardShortcuts.Key] = [.one, .two, .three, .four, .five, .six, .seven, .eight]
+            return switch self {
+            case .next: .init(.tab, modifiers: co)
+            case .previous: .init(.tab, modifiers: co.union(.shift))
+            case .tab1, .tab2, .tab3, .tab4, .tab5, .tab6, .tab7, .tab8: .init(digits[Int(rawValue - Self.tab1.rawValue)], modifiers: co)
+            case .last: .init(.nine, modifiers: co)
+            case .close: .init(.w, modifiers: co)
+            case .moveToNewWindow: .init(.n, modifiers: co.union(.shift))
+            case .rename: .init(.r, modifiers: co)
+            }
+        }
+
+        /// Created once: a name stores its initial shortcut the first time it's made.
+        private static let names = Dictionary(uniqueKeysWithValues: allCases.map {
+            ($0, KeyboardShortcuts.Name("tabsome_\($0)", initial: $0.initial))
+        })
     }
 
     var onAction: ((Action) -> Void)?
-    private var refs: [EventHotKeyRef] = []
-    private var handler: EventHandlerRef?
-    private static let signature: OSType = 0x5462_736D // 'Tbsm'
 
-    /// Key code and Carbon modifiers for each action.
-    static let bindings: [(Action, Int, Int)] = {
-        let co = controlKey | optionKey
-        let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8]
-        let tabs: [Action] = [.tab1, .tab2, .tab3, .tab4, .tab5, .tab6, .tab7, .tab8]
-        return [(.next, kVK_Tab, co), (.previous, kVK_Tab, co | shiftKey)]
-            + zip(tabs, digits).map { ($0, $1, co) }
-            + [(.last, kVK_ANSI_9, co), (.close, kVK_ANSI_W, co), (.moveToNewWindow, kVK_ANSI_N, co | shiftKey), (.rename, kVK_ANSI_R, co)]
-    }()
+    init() {
+        // Off until a group is focused (`isEnabled`); handlers alone don't take the keys.
+        KeyboardShortcuts.isEnabled = false
+        for action in Action.allCases {
+            KeyboardShortcuts.onKeyDown(for: action.name) { [weak self] in self?.onAction?(action) }
+        }
+    }
 
+    /// A group is focused.
     var isEnabled = false {
-        didSet {
-            guard isEnabled != oldValue else { return }
-            isEnabled ? register() : unregister()
-        }
+        didSet { apply() }
     }
 
-    private func register() {
-        installHandlerOnce()
-        for (action, key, modifiers) in Self.bindings {
-            var ref: EventHotKeyRef?
-            let id = EventHotKeyID(signature: Self.signature, id: action.rawValue)
-            if RegisterEventHotKey(UInt32(key), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &ref) == noErr, let ref {
-                refs.append(ref)
-            }
-        }
+    /// Settings › Shortcuts › "Use keyboard shortcuts": off, the keys are never taken, even
+    /// while a group is focused.
+    var isAllowed = true {
+        didSet { apply() }
     }
 
-    private func unregister() {
-        for ref in refs { UnregisterEventHotKey(ref) }
-        refs.removeAll()
+    private func apply() {
+        let on = isEnabled && isAllowed
+        if KeyboardShortcuts.isEnabled != on { KeyboardShortcuts.isEnabled = on }
     }
 
-    private func installHandlerOnce() {
-        guard handler == nil else { return }
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, refcon -> OSStatus in
-            guard let event, let refcon else { return OSStatus(eventNotHandledErr) }
-            var id = EventHotKeyID()
-            let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                                           nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-            guard status == noErr, id.signature == HotKeys.signature, let action = HotKeys.Action(rawValue: id.id) else {
-                return OSStatus(eventNotHandledErr)
-            }
-            let hotKeys = Unmanaged<HotKeys>.fromOpaque(refcon).takeUnretainedValue()
-            MainActor.assumeIsolated { hotKeys.onAction?(action) }
-            return noErr
-        }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+    /// Settings › Shortcuts › Restore Defaults.
+    static func restoreDefaults() {
+        KeyboardShortcuts.reset(Action.allCases.map(\.name))
+    }
+
+    /// The other action already using `shortcut`, if any, so one key never does two things.
+    static func conflict(for shortcut: KeyboardShortcuts.Shortcut, excluding action: Action,
+                         current: (Action) -> KeyboardShortcuts.Shortcut?) -> Action? {
+        Action.allCases.first { $0 != action && current($0) == shortcut }
     }
 }

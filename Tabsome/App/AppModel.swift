@@ -48,6 +48,15 @@ final class AppModel {
         }
     }
 
+    static let shortcutsEnabledKey = "shortcutsEnabled"
+    /// Settings › Shortcuts › "Use keyboard shortcuts" (on by default).
+    var shortcutsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(shortcutsEnabled, forKey: Self.shortcutsEnabledKey)
+            hotKeys.isAllowed = shortcutsEnabled
+        }
+    }
+
     static let dwellDelayKey = "dwellDelay"
     static let dwellDelayRange: ClosedRange<Double> = 0.2...1.0
     /// Settings › General: how long to pause over a window before it's ready to tab (§5.3).
@@ -112,6 +121,8 @@ final class AppModel {
         let zone = defaults.object(forKey: Self.middleZoneKey) as? Double ?? 1 - 2 * DropZone.defaultInset
         middleZone = min(max(zone, Self.middleZoneRange.lowerBound), Self.middleZoneRange.upperBound)
         stripOptions = Self.savedStripOptions(defaults)
+        shortcutsEnabled = defaults.object(forKey: Self.shortcutsEnabledKey) as? Bool ?? true
+        hotKeys.isAllowed = shortcutsEnabled
         groups.badges.source = DockBadgeReader()
         groups.setStripOptions(stripOptions)
         groups.setPlacement(tabPlacement)

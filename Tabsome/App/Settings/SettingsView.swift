@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The Settings window skeleton (PLAN.md §7 Phase 1). Tabs, Apps, and Shortcuts arrive with
-/// the features they configure.
+/// The Settings window (PLAN.md §7 Phase 6): General, Tabs, Apps, Shortcuts, and About.
 struct SettingsView: View {
     let model: AppModel
     /// The pane last shown, so Settings reopens where it was left.
@@ -18,6 +17,9 @@ struct SettingsView: View {
             }
             Tab("Apps", systemImage: "square.grid.2x2", value: "apps") {
                 AppsSettingsView(model: model)
+            }
+            Tab("Shortcuts", systemImage: "command", value: "shortcuts") {
+                ShortcutsSettingsView(model: model)
             }
             Tab("About", systemImage: "info.circle", value: "about") {
                 AboutSettingsView()
@@ -405,26 +407,5 @@ struct TabPositionPicker: View {
                 .padding(8)
             }
         }
-    }
-}
-
-struct AboutSettingsView: View {
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "Version \(short) (\(build))"
-    }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 96, height: 96)
-            Text(Brand.name).font(.title2.bold())
-            Text(version).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(32)
     }
 }

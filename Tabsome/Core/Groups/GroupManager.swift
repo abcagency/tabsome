@@ -555,7 +555,7 @@ final class GroupManager {
         onFocusedGroupChanged?(focused)
     }
 
-    /// ⌃⌥Tab / ⌃⌥⇧Tab wrap around; ⌃⌥1–8 go to that tab; ⌃⌥9 is the last tab; ⌃⌥W closes the
+    /// With the default keys: ⌃⌥Tab / ⌃⌥⇧Tab wrap around; ⌃⌥1–8 go to that tab; ⌃⌥9 is the last tab; ⌃⌥W closes the
     /// active tab; ⌃⌥⇧N moves it out; ⌃⌥R renames it.
     func perform(_ action: HotKeys.Action) {
         updateFocus()

@@ -941,6 +941,13 @@ Checked by script: every strip size in Top, Left, and Left with names, on a real
 
 Checked by script: a real Dock badge reaches the tabs in Top, Left, and Left with names, changes within 3 s, clears, and caps. With a group open, Tabsome used about 20 ms of CPU in 30 s. 199 unit tests in total. The new ones cover matching Dock items to apps, capping long badges, the monitor reading at once and then on its timer, and the Dock being read only while a group exists.
 
+**6c (2026-10-27): done.** Checked by hand: the shortcuts, rebinding, conflicts, Restore Defaults, the on/off toggle, relaunch, and About.
+- **KeyboardShortcuts 3.1.0** (SPM, up to the next major version) now registers the tab shortcuts. It still uses Carbon's `RegisterEventHotKey`, so there's no Input Monitoring permission and Tabsome never sees other keystrokes (S5). The keys are registered only while a group is focused, as before, through its global `isEnabled`.
+- **Settings › Shortcuts:** a **Use keyboard shortcuts** toggle at the top (on by default, added at the user's request during the hand check). Off, Tabsome never takes any keys, even while a group is focused, and the fields below are dimmed. Then every tab shortcut, in two sections: switching (Next, Previous, Tab 1–8 in two columns, Last) and the active tab (Close, Move to New Window, Rename). Click a field and press new keys, or clear it to turn that shortcut off. A key macOS already uses gets KeyboardShortcuts' warning; a key another tab shortcut has is refused, naming it. **Restore Defaults** brings back the ⌃⌥ browser layout. The choices live in UserDefaults under `KeyboardShortcuts_tabsome_<action>`.
+- **Settings › About:** the icon, version, a one-line description, and Acknowledgements (KeyboardShortcuts, with its website and MIT license). Check for Updates… and Report a Problem… come in Phase 7.
+
+Checked by script: both panes fit without scrolling. 203 unit tests in total. The new ones cover the default layout, every action having its own title and keys, and conflicts between actions.
+
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
 - Developer ID signing, notarization (`notarytool`), and a stapled DMG (`create-dmg`).
