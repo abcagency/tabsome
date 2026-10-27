@@ -165,14 +165,23 @@ final class GroupManager {
                     return self.scheduleSettleCheck(gid)
                 }
                 Task { @MainActor in
-                    await proxy.spring(to: self.landing(active, at: g.content))
+                    await self.spring(proxy, of: active, to: self.landing(active, at: g.content))
                     self.activateWindow(active)
                     self.scheduleSettleCheck(gid)
-                    if let final = await WindowCapture.capture(active) { proxy.crossfade(to: final) }
                     await proxy.fadeOut()
                 }
             }
         }
+    }
+
+    /// The window has already landed behind the cover, so a snapshot at its final size is taken
+    /// while the spring runs, and the proxy cross-fades to it as soon as it arrives (§5.9 step
+    /// 4). The picture taken before the drop is then stretched only for the spring's first
+    /// moment, not all the way to the group's size.
+    private func spring(_ proxy: WindowProxy, of id: CGWindowID, to frame: CGRect) async {
+        let springing = Task { await proxy.spring(to: frame) }
+        if let final = await WindowCapture.capture(id) { proxy.crossfade(to: final) }
+        await springing.value
     }
 
     private func canAbsorb(_ count: Int, into t: CGWindowID) -> Bool {
@@ -205,14 +214,34 @@ final class GroupManager {
     /// the old side's strip space goes back, the new side's is taken, and each strip is rebuilt.
     func setPlacement(_ new: TabPlacement) {
         guard new != placement else { return }
-        placement = new
+        relayout { self.placement = new }
+    }
+
+    /// Settings › Tabs: strip size, tab min width, and close buttons. A new size re-lays out
+    /// every group the way a placement change does; the others only redraw the strips.
+    func setStripOptions(_ new: StripOptions) {
+        let old = StripLayout.options
+        guard new != old else { return }
+        if new.size != old.size {
+            relayout { StripLayout.options = new }
+        } else {
+            StripLayout.options = new
+        }
+        for strip in strips.values { strip.options = new }
+    }
+
+    /// Applies a change to the strip's side or thickness: each group keeps its outer frame and
+    /// its windows take what's left beside the new strip.
+    private func relayout(_ change: () -> Void) {
+        let outers = groups.mapValues(\.outer)
+        change()
         for (gid, var g) in groups {
-            let outer = g.outer
-            g.placement = new
-            g.content = StripLayout.frames(outer: outer, placement: new).content
+            g.placement = placement
+            g.content = StripLayout.frames(outer: outers[gid] ?? g.outer, placement: placement).content
             groups[gid] = g
             guard let strip = strips[gid] else { continue }
-            strip.placement = new
+            strip.placement = placement
+            strip.options = StripLayout.options
             if !g.isMinimized { strip.place(content: g.content, above: g.activeID) }
             markSettling(gid)
             syncMembers(of: gid, reconcile: true) { self.scheduleSettleCheck(gid) }
@@ -1180,6 +1209,7 @@ final class GroupManager {
             rename: { [weak self] id, name, refocus in self?.rename(id, to: name, refocus: refocus) },
             cancelRename: { [weak self] id in self?.refocus(id) }))
         strip.placement = g.placement
+        strip.options = StripLayout.options
         strips[g.id] = strip
         refreshStrip(g.id)
         return strip

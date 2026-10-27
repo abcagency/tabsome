@@ -15,8 +15,8 @@ enum Motion {
     static var interactive: Animation { reduced ? crossFade : .interactiveSpring }
 
     /// The Core Animation twin of `snappy`, for overlay panels and window proxies.
-    static func snappySpring() -> CASpringAnimation {
-        CASpringAnimation(perceptualDuration: 0.3, bounce: 0.15)
+    static func snappySpring(bounce: CGFloat = 0.15) -> CASpringAnimation {
+        CASpringAnimation(perceptualDuration: 0.3, bounce: bounce)
     }
 
     /// Proxy hand-off: the snapshot fades out over this once the real window is in place.

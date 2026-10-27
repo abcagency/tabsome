@@ -125,6 +125,9 @@ final class TabStripModel {
     }
 
     var placement: TabPlacement = .top
+    /// Settings › Tabs: strip size, tab min width, and close buttons. Kept here, not only in
+    /// `StripLayout.options`, so a change redraws the strip.
+    var options = StripOptions()
     var activeIndex: Int { tabs.firstIndex(where: \.isActive) ?? 0 }
     /// The quiet 50-tab limit (§1): a full strip has no "+".
     var canAdd: Bool { tabs.count < TabGroup.maxTabs }
@@ -133,8 +136,8 @@ final class TabStripModel {
     func layout(size: CGSize) -> StripLayout.TabsLayout {
         switch placement {
         case .top: layout(width: size.width)
-        case .left: StripLayout.left(height: size.height, count: tabs.count, active: activeIndex, showsPlus: canAdd)
-        case .leftNamed: StripLayout.left(height: size.height, count: tabs.count, active: activeIndex, showsPlus: canAdd, named: true)
+        case .left: StripLayout.left(height: size.height, count: tabs.count, active: activeIndex, showsPlus: canAdd, size: options.size)
+        case .leftNamed: StripLayout.left(height: size.height, count: tabs.count, active: activeIndex, showsPlus: canAdd, named: true, size: options.size)
         }
     }
 
@@ -144,7 +147,7 @@ final class TabStripModel {
     func layout(width: CGFloat) -> StripLayout.TabsLayout {
         // While renaming, that tab widens to fit what's typed (§5.10), up to what the strip allows.
         let wide = renaming.flatMap { id in tabs.firstIndex { $0.id == id } }.map { ($0, Self.labelWidth(renameDraft) + 64) }
-        return StripLayout.top(width: width, count: tabs.count, active: activeIndex, showsPlus: canAdd, frozenWidth: frozenWidth, wide: wide)
+        return StripLayout.top(width: width, count: tabs.count, active: activeIndex, showsPlus: canAdd, frozenWidth: frozenWidth, wide: wide, options: options)
     }
 
     static func labelWidth(_ text: String) -> CGFloat {
@@ -180,6 +183,10 @@ final class TabBarWindow {
 
     var placement: TabPlacement = .top {
         didSet { model.placement = placement }
+    }
+
+    var options = StripOptions() {
+        didSet { model.options = options }
     }
 
     init(actions: StripActions) {
@@ -559,7 +566,7 @@ struct StripBackground: View {
     let model: TabStripModel
 
     var body: some View {
-        let shape = StripShape(placement: model.placement, thickness: StripLayout.thickness(model.placement))
+        let shape = StripShape(placement: model.placement, thickness: StripLayout.thickness(model.placement, size: model.options.size))
         shape.fill(.clear).glassEffect(.regular, in: shape)
             .modifier(StripAppearance(model: model))
             .allowsHitTesting(false)

@@ -48,6 +48,49 @@ final class AppModel {
         }
     }
 
+    static let dwellDelayKey = "dwellDelay"
+    static let dwellDelayRange: ClosedRange<Double> = 0.2...1.0
+    /// Settings › General: how long to pause over a window before it's ready to tab (§5.3).
+    var dwellDelay: Double {
+        didSet {
+            UserDefaults.standard.set(dwellDelay, forKey: Self.dwellDelayKey)
+            drag.dwellDelay = dwellDelay
+        }
+    }
+
+    static let middleZoneKey = "middleZone"
+    static let middleZoneRange: ClosedRange<Double> = 0.3...0.7
+    /// Settings › General: how much of a window counts as its middle (§5.2), as a fraction of
+    /// its width and height (0.5 is the central 50% × 50%).
+    var middleZone: Double {
+        didSet {
+            UserDefaults.standard.set(middleZone, forKey: Self.middleZoneKey)
+            drag.middleInset = (1 - middleZone) / 2
+        }
+    }
+
+    static let stripSizeKey = "stripSize", minTabWidthKey = "minTabWidth", showCloseButtonsKey = "showCloseButtons"
+    /// Settings › Tabs: strip size, tab min width, and close buttons. Applies to every group live.
+    var stripOptions: StripOptions {
+        didSet {
+            let d = UserDefaults.standard
+            d.set(stripOptions.size.rawValue, forKey: Self.stripSizeKey)
+            d.set(Double(stripOptions.minTabWidth), forKey: Self.minTabWidthKey)
+            d.set(stripOptions.showsCloseButtons, forKey: Self.showCloseButtonsKey)
+            groups.setStripOptions(stripOptions)
+        }
+    }
+
+    private static func savedStripOptions(_ d: UserDefaults) -> StripOptions {
+        var o = StripOptions()
+        if let size = d.string(forKey: stripSizeKey).flatMap(StripSize.init(rawValue:)) { o.size = size }
+        if d.object(forKey: minTabWidthKey) != nil {
+            o.minTabWidth = min(max(CGFloat(d.double(forKey: minTabWidthKey)), StripOptions.minTabWidthRange.lowerBound), StripOptions.minTabWidthRange.upperBound)
+        }
+        if d.object(forKey: showCloseButtonsKey) != nil { o.showsCloseButtons = d.bool(forKey: showCloseButtonsKey) }
+        return o
+    }
+
     @ObservationIgnored private lazy var onboarding = OnboardingWindowController(model: self)
 
     static let onboardingCompletedKey = "onboardingCompleted"
@@ -59,8 +102,17 @@ final class AppModel {
     init(windowSystem: WindowSystem = AXWindowSystem()) {
         registry = WindowRegistry(system: windowSystem)
         groups = GroupManager(registry: registry, system: windowSystem)
-        tabPlacement = UserDefaults.standard.string(forKey: Self.tabPlacementKey).flatMap(TabPlacement.init(rawValue:)) ?? .top
+        let defaults = UserDefaults.standard
+        tabPlacement = defaults.string(forKey: Self.tabPlacementKey).flatMap(TabPlacement.init(rawValue:)) ?? .top
+        let dwell = defaults.object(forKey: Self.dwellDelayKey) as? Double ?? DwellStateMachine.Config().dwell
+        dwellDelay = min(max(dwell, Self.dwellDelayRange.lowerBound), Self.dwellDelayRange.upperBound)
+        let zone = defaults.object(forKey: Self.middleZoneKey) as? Double ?? 1 - 2 * DropZone.defaultInset
+        middleZone = min(max(zone, Self.middleZoneRange.lowerBound), Self.middleZoneRange.upperBound)
+        stripOptions = Self.savedStripOptions(defaults)
+        groups.setStripOptions(stripOptions)
         groups.setPlacement(tabPlacement)
+        drag.dwellDelay = dwellDelay
+        drag.middleInset = (1 - middleZone) / 2
         groups.confirmCloseAll = Self.confirmCloseAll
         hotKeys.onAction = { [weak self] action in self?.groups.perform(action) }
         // Registered only while a group is focused, so the keys reach other apps otherwise.

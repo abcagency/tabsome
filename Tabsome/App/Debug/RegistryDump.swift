@@ -60,12 +60,28 @@ enum RegistryDump {
     /// `-TabsomeDebugDumpAfter <seconds>` writes the dump once the registry has settled;
     /// add `-TabsomeDebugQuitAfterDump YES` to quit afterwards (used for scripted checks).
     private static var quitObserver: NSObjectProtocol?
+    private static var groupObserver: NSObjectProtocol?
+    private static var stripObserver: NSObjectProtocol?
 
     static func handleLaunchArguments(_ model: AppModel) {
         // Scripted checks can ask for a real Quit (applicationShouldTerminate and all).
         quitObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.quit"), object: nil, queue: .main) { _ in
             // Like a menu click: from the run loop, not from inside a main-queue block.
             RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        }
+        // Scripted layout checks without synthesized input: "target,dragged" tabs one window
+        // into another, and "size[,placement]" sets the strip (e.g. "large,left").
+        groupObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.group"), object: nil, queue: .main) { note in
+            let ids = (note.object as? String ?? "").split(separator: ",").compactMap { CGWindowID($0) }
+            guard ids.count == 2 else { return }
+            MainActor.assumeIsolated { model.groups.merge(dragged: ids[1], into: ids[0], dropFrame: nil, snapshot: nil) }
+        }
+        stripObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.strip"), object: nil, queue: .main) { note in
+            let parts = (note.object as? String ?? "").split(separator: ",").map(String.init)
+            MainActor.assumeIsolated {
+                if let size = parts.first.flatMap(StripSize.init(rawValue:)) { model.stripOptions.size = size }
+                if parts.count > 1, let placement = TabPlacement(rawValue: parts[1]) { model.tabPlacement = placement }
+            }
         }
         let defaults = UserDefaults.standard
         let delay = defaults.double(forKey: "TabsomeDebugDumpAfter")
@@ -85,7 +101,9 @@ struct DebugSettingsHook: ViewModifier {
     @Environment(\.openSettings) private var openSettings
 
     func body(content: Content) -> some View {
-        content.onReceive(DistributedNotificationCenter.default().publisher(for: .init("com.tabsome.debug.settings"))) { _ in
+        content.onReceive(DistributedNotificationCenter.default().publisher(for: .init("com.tabsome.debug.settings"))) { note in
+            // The notification's object names a pane to show ("general", "tabs", "apps", "about").
+            if let pane = note.object as? String { UserDefaults.standard.set(pane, forKey: SettingsView.paneKey) }
             NSApp.activate()
             openSettings()
         }

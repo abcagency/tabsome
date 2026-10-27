@@ -12,20 +12,55 @@ nonisolated enum TabPlacement: String, CaseIterable, Sendable {
     var isLeft: Bool { self != .top }
 }
 
+/// Settings › Tabs › Strip size: how thick the strip is in every placement.
+nonisolated enum StripSize: String, CaseIterable, Sendable {
+    case small, medium, large
+
+    var title: String {
+        switch self {
+        case .small: "Small"
+        case .medium: "Medium"
+        case .large: "Large"
+        }
+    }
+}
+
+/// The strip settings from Settings › Tabs that change how strips are drawn and laid out.
+nonisolated struct StripOptions: Equatable, Sendable {
+    var size: StripSize = .medium
+    /// Top mode: below this width, tabs drop their names and show only icons.
+    var minTabWidth: CGFloat = 90
+    var showsCloseButtons = true
+
+    static let minTabWidthRange: ClosedRange<CGFloat> = 60...200
+}
+
 /// The one pure function behind every strip and content frame (PLAN.md §5.6), so the geometry
 /// is tested once for both placements. All rects are global, top-left origin.
 nonisolated enum StripLayout {
-    static func thickness(_ placement: TabPlacement) -> CGFloat {
-        switch placement {
-        case .top: Metrics.topStripHeight
-        case .left: Metrics.leftStripWidth
-        case .leftNamed: Metrics.leftNamedStripWidth
+    /// The current Settings › Tabs choices, the default for every function below. Written only
+    /// on the main thread, when a setting changes, which is where strips are laid out too.
+    nonisolated(unsafe) static var options = StripOptions()
+
+    /// Medium is the measured size (a plain title bar on top, §5.15); Small and Large step
+    /// around it.
+    static func thickness(_ placement: TabPlacement, size: StripSize = options.size) -> CGFloat {
+        switch (placement, size) {
+        case (.top, .small): 28
+        case (.top, .medium): Metrics.topStripHeight
+        case (.top, .large): 38
+        case (.left, .small): 34
+        case (.left, .medium): Metrics.leftStripWidth
+        case (.left, .large): 48
+        case (.leftNamed, .small): 150
+        case (.leftNamed, .medium): Metrics.leftNamedStripWidth
+        case (.leftNamed, .large): 220
         }
     }
 
     /// Splits a group's outer frame into the strip and the members' (content) frame.
-    static func frames(outer: CGRect, placement: TabPlacement) -> (strip: CGRect, content: CGRect) {
-        let t = thickness(placement)
+    static func frames(outer: CGRect, placement: TabPlacement, size: StripSize = options.size) -> (strip: CGRect, content: CGRect) {
+        let t = thickness(placement, size: size)
         switch placement {
         case .top:
             return (CGRect(x: outer.minX, y: outer.minY, width: outer.width, height: t),
@@ -37,8 +72,8 @@ nonisolated enum StripLayout {
     }
 
     /// The outer frame (strip + window) for a members' frame.
-    static func outer(content: CGRect, placement: TabPlacement) -> CGRect {
-        let t = thickness(placement)
+    static func outer(content: CGRect, placement: TabPlacement, size: StripSize = options.size) -> CGRect {
+        let t = thickness(placement, size: size)
         switch placement {
         case .top: return CGRect(x: content.minX, y: content.minY - t, width: content.width, height: content.height + t)
         case .left, .leftNamed: return CGRect(x: content.minX - t, y: content.minY, width: content.width + t, height: content.height)
@@ -92,20 +127,21 @@ nonisolated enum StripLayout {
         var slotLength: CGFloat { frames.first.map { vertical ? $0.height : $0.width } ?? 0 }
     }
 
-    static let minFullTabWidth: CGFloat = 90
     static let iconTabWidth: CGFloat = 40
     static let buttonWidth: CGFloat = 28
 
-    /// Tabs share the width evenly with a minimum of about 90 pt; below that they shrink to
-    /// icon-only, and when even those don't fit, the rest go into a » menu. The active tab is
-    /// always visible. `frozenWidth` keeps widths still while the user closes tabs in a row.
+    /// Tabs share the width evenly with a minimum of `options.minTabWidth` (90 pt by default);
+    /// below that they shrink to icon-only, and when even those don't fit, the rest go into a »
+    /// menu. The active tab is always visible. `frozenWidth` keeps widths still while the user
+    /// closes tabs in a row.
     static func top(width: CGFloat, count: Int, active: Int, showsPlus: Bool, frozenWidth: CGFloat? = nil,
-                    wide: (index: Int, width: CGFloat)? = nil) -> TabsLayout {
+                    wide: (index: Int, width: CGFloat)? = nil, options: StripOptions = options) -> TabsLayout {
         guard count > 0 else { return TabsLayout(style: .full, visible: [], frames: [], overflow: []) }
+        let minFullTabWidth = max(options.minTabWidth, iconTabWidth)
         let start = tabsLeadingInset
         let plus = showsPlus ? buttonWidth : 0
         let available = max(0, width - start - tabsTrailingInset - plus)
-        let height = thickness(.top)
+        let height = thickness(.top, size: options.size)
 
         func layout(_ visible: [Int], _ w: CGFloat, _ style: TabsLayout.Style, overflow: [Int]) -> TabsLayout {
             let frames = visible.indices.map { CGRect(x: start + CGFloat($0) * w, y: 0, width: w, height: height) }
@@ -155,11 +191,11 @@ nonisolated enum StripLayout {
     /// Left mode (PLAN.md §5.6): a 40 pt column of 28 pt icons, one per tab, with "+" below the
     /// last one. When the tabs outgrow the window's height, the rest go into a » menu at the bottom
     /// (the active tab always stays visible).
-    static func left(height: CGFloat, count: Int, active: Int, showsPlus: Bool, named: Bool = false) -> TabsLayout {
-        let w = thickness(named ? .leftNamed : .left)
+    static func left(height: CGFloat, count: Int, active: Int, showsPlus: Bool, named: Bool = false, size: StripSize = options.size) -> TabsLayout {
+        let w = thickness(named ? .leftNamed : .left, size: size)
         let style: TabsLayout.Style = named ? .full : .iconOnly
         guard count > 0 else { return TabsLayout(style: style, vertical: true, visible: [], frames: [], overflow: []) }
-        let start = leftTopInset, slot = named ? leftNamedRowHeight : leftSlotHeight
+        let start = leftTopInset, slot = named ? leftNamedRowHeight : leftSlotHeight(size)
         let plus = showsPlus ? buttonWidth : 0
         let available = max(0, height - start - leftTopInset - plus)
 
@@ -183,8 +219,15 @@ nonisolated enum StripLayout {
     }
 
     static let leftTopInset: CGFloat = 8
-    static let leftSlotHeight: CGFloat = 36
-    static let leftIconSize: CGFloat = 28
+    /// Compact Left: each icon's slot, 8 pt taller than the icon.
+    static func leftSlotHeight(_ size: StripSize = options.size) -> CGFloat { leftIconSize(size) + 8 }
+    static func leftIconSize(_ size: StripSize = options.size) -> CGFloat {
+        switch size {
+        case .small: 24
+        case .medium: 28
+        case .large: 34
+        }
+    }
     static let leftNamedRowHeight: CGFloat = 30
     static let leftNamedIconSize: CGFloat = 18
 

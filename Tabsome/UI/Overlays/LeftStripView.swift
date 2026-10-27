@@ -58,7 +58,7 @@ struct LeftStripView: View {
                 }
 
                 if let y = model.insertion.flatMap(layout.markerPosition(for:)) {
-                    let w = StripLayout.thickness(model.placement) - 14
+                    let w = StripLayout.thickness(model.placement, size: model.options.size) - 14
                     Capsule().fill(Color.accentColor)
                         .frame(width: w, height: 3)
                         .offset(x: 7, y: y - 1.5)
@@ -171,10 +171,10 @@ private struct LeftTab: View {
             }
             if let icon = NSRunningApplication(processIdentifier: tab.pid)?.icon {
                 Image(nsImage: icon).resizable()
-                    .frame(width: StripLayout.leftIconSize, height: StripLayout.leftIconSize)
+                    .frame(width: StripLayout.leftIconSize(model.options.size), height: StripLayout.leftIconSize(model.options.size))
                     .opacity(tab.isActive || hovered ? 1 : 0.75)
             }
-            if hovered {
+            if hovered, model.options.showsCloseButtons {
                 Button { actions.close(tab.id) } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 7, weight: .bold))
@@ -225,13 +225,15 @@ private struct NamedLeftTab: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
-                Button { actions.close(tab.id) } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16).contentShape(Rectangle())
+                if model.options.showsCloseButtons {
+                    Button { actions.close(tab.id) } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).frame(width: 16, height: 16).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .opacity(tab.isActive || hovered ? 1 : 0)
+                    .accessibilityLabel("Close \(tab.label)")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(tab.isActive || hovered ? 1 : 0)
-                .accessibilityLabel("Close \(tab.label)")
             }
         }
         .padding(.horizontal, 8)

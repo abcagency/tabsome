@@ -70,7 +70,7 @@ private struct DropHighlightView: View {
         Group {
             if model.placement == .top {
                 VStack(spacing: 0) {
-                    GhostStrip(tabs: model.tabs).frame(height: Metrics.topStripHeight)
+                    GhostStrip(tabs: model.tabs).frame(height: StripLayout.thickness(.top))
                     highlight
                 }
             } else {
@@ -119,8 +119,8 @@ private struct GhostColumn: View {
     let named: Bool
 
     var body: some View {
-        let icon = named ? StripLayout.leftNamedIconSize : StripLayout.leftIconSize
-        VStack(spacing: named ? 4 : StripLayout.leftSlotHeight - StripLayout.leftIconSize) {
+        let icon = named ? StripLayout.leftNamedIconSize : StripLayout.leftIconSize()
+        VStack(spacing: named ? 4 : StripLayout.leftSlotHeight() - StripLayout.leftIconSize()) {
             ForEach(tabs) { tab in
                 HStack(spacing: 6) {
                     if let image = NSRunningApplication(processIdentifier: tab.pid)?.icon {

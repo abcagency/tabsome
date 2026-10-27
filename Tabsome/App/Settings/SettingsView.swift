@@ -4,19 +4,22 @@ import SwiftUI
 /// the features they configure.
 struct SettingsView: View {
     let model: AppModel
+    /// The pane last shown, so Settings reopens where it was left.
+    @AppStorage(Self.paneKey) private var pane = "general"
+    static let paneKey = "settingsPane"
 
     var body: some View {
-        TabView {
-            Tab("General", systemImage: "gearshape") {
+        TabView(selection: $pane) {
+            Tab("General", systemImage: "gearshape", value: "general") {
                 GeneralSettingsView(model: model)
             }
-            Tab("Tabs", systemImage: "rectangle.topthird.inset.filled") {
+            Tab("Tabs", systemImage: "rectangle.topthird.inset.filled", value: "tabs") {
                 TabsSettingsView(model: model)
             }
-            Tab("Apps", systemImage: "square.grid.2x2") {
+            Tab("Apps", systemImage: "square.grid.2x2", value: "apps") {
                 AppsSettingsView(model: model)
             }
-            Tab("About", systemImage: "info.circle") {
+            Tab("About", systemImage: "info.circle", value: "about") {
                 AboutSettingsView()
             }
         }
@@ -83,6 +86,26 @@ struct GeneralSettingsView: View {
                 AppearancePicker(selection: $appearance.mode)
                     .frame(maxWidth: .infinity)
             }
+            Section {
+                ValueSlider("Pause before tabbing", value: $model.dwellDelay, in: AppModel.dwellDelayRange, step: 0.05,
+                            text: { String(format: "%.2f s", $0) })
+                ValueSlider("Middle of a window", value: $model.middleZone, in: AppModel.middleZoneRange, step: 0.05,
+                            text: { "\(Int(($0 * 100).rounded()))%" })
+            } header: {
+                Text("Making tabs")
+            } footer: {
+                Text("Drag a window over the middle of another one and pause to tab them. A smaller middle leaves more of each window’s edges for passing over.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Permissions") {
+                PermissionRow(title: "Accessibility", granted: model.permissions.accessibility,
+                              note: "Needed to move and tab windows.",
+                              action: ("Open Privacy & Security…", model.permissions.openAccessibilitySettings))
+                PermissionRow(title: "Screen & System Audio Recording", granted: model.permissions.screenRecording,
+                              note: "Optional. Previews and animations show app icons without it.",
+                              action: ("Allow…", model.permissions.requestScreenRecording))
+            }
         }
         .formStyle(.grouped)
         .fitsContent()
@@ -93,6 +116,63 @@ struct GeneralSettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             login.refresh()
             stageManagerOn = StageManager.isOn
+        }
+    }
+}
+
+/// A slider row that shows its value on the right.
+struct ValueSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let text: (Double) -> String
+
+    init(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double, text: @escaping (Double) -> String) {
+        self.title = title
+        _value = value
+        self.range = range
+        self.step = step
+        self.text = text
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                Slider(value: $value, in: range, step: step)
+                    .labelsHidden()
+                    .frame(width: 180)
+                Text(text(value))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .trailing)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// One permission's state: a green check when it's allowed, otherwise what it's for and a button.
+struct PermissionRow: View {
+    let title: String
+    let granted: Bool
+    let note: String
+    let action: (String, () -> Void)
+
+    var body: some View {
+        LabeledContent {
+            if granted {
+                Label {
+                    Text("Allowed").foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+            } else {
+                Button(action.0, action: action.1)
+            }
+        } label: {
+            Text(title)
+            if !granted { Text(note) }
         }
     }
 }
@@ -181,6 +261,7 @@ struct AppearanceThumbnail: View {
 struct TabsSettingsView: View {
     let model: AppModel
     @AppStorage(HoverPreview.settingKey) private var showsPreviews = true
+    @AppStorage(AppModel.askBeforeClosingAllKey) private var asksBeforeClosingAll = true
 
     var body: some View {
         @Bindable var model = model
@@ -206,6 +287,24 @@ struct TabsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Picker("Strip size", selection: $model.stripOptions.size) {
+                    ForEach(StripSize.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if !model.tabPlacement.isLeft {
+                    ValueSlider("Minimum tab width", value: minTabWidth, in: minTabWidthRange, step: 10,
+                                text: { "\(Int($0)) pt" })
+                }
+                Toggle("Show close buttons on tabs", isOn: $model.stripOptions.showsCloseButtons)
+                Toggle("Ask before closing all tabs", isOn: $asksBeforeClosingAll)
+            } footer: {
+                Text(model.tabPlacement.isLeft
+                     ? "Without close buttons, close a tab from its right-click menu. Close All Tabs is in the strip’s right-click menu."
+                     : "Narrower tabs show only their icons. Without close buttons, close a tab from its right-click menu. The red button closes all tabs.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Show previews when hovering tabs", isOn: $showsPreviews)
             } footer: {
                 Text(CGPreflightScreenCaptureAccess()
@@ -223,6 +322,14 @@ struct TabsSettingsView: View {
 extension TabsSettingsView {
     /// Remembers which Left style to come back to after switching to Top and back.
     static let leftStyleKey = "leftTabStyle"
+
+    private var minTabWidth: Binding<Double> {
+        Binding(get: { Double(model.stripOptions.minTabWidth) }, set: { model.stripOptions.minTabWidth = CGFloat($0) })
+    }
+
+    private var minTabWidthRange: ClosedRange<Double> {
+        Double(StripOptions.minTabWidthRange.lowerBound)...Double(StripOptions.minTabWidthRange.upperBound)
+    }
 
     var description: String {
         switch model.tabPlacement {

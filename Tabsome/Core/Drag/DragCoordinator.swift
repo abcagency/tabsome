@@ -43,6 +43,11 @@ final class DragCoordinator {
     private var snapshotTask: Task<Void, Never>?
     private static let resolveInterval: TimeInterval = 1.0 / 30
 
+    /// Settings › General (§5.2, §5.3): how long to pause over a window, and how much of each
+    /// side is left out of its middle. Each takes effect from the next drag.
+    var dwellDelay: TimeInterval = DwellStateMachine.Config().dwell
+    var middleInset: CGFloat = DropZone.defaultInset
+
     init(registry: WindowRegistry, groups: GroupManager) {
         self.registry = registry
         self.groups = groups
@@ -60,6 +65,7 @@ final class DragCoordinator {
 
     func tabDragBegan(window: CGWindowID, group: UUID, count: Int = 1) {
         endPress(cancel: true)
+        applySettings()
         press = Press(window: window, source: .tab(group, count: count), downFrame: .zero, dragging: true)
     }
 
@@ -89,6 +95,7 @@ final class DragCoordinator {
 
     private func pressed(at point: CGPoint) {
         endPress(cancel: true)
+        applySettings()
         guard !Eligibility.secureInputActive,
               let hit = ScreenWindows.onScreen().first(where: { $0.layer == 0 && $0.pid != ownPID && $0.bounds.contains(point) }),
               let entry = registry.windows[hit.id], Eligibility.canTab(entry.window, bundleID: entry.app.bundleID) else { return }
@@ -138,7 +145,7 @@ final class DragCoordinator {
         }
         let resolved = DropTargetResolver.resolve(cursor: point, windows: ScreenWindows.onScreen(), dragged: p.window, ownPID: ownPID,
                                                   strip: { [groups] w in groups.stripHit(panel: w.id, cursor: point, excluding: p.source.group, incoming: incoming(p)) },
-                                                  isEligible: { id in self.eligibleTarget(id, for: p) })
+                                                  isEligible: { id in self.eligibleTarget(id, for: p) }, inset: middleInset)
         p.lastTarget = resolved
         press = p
         perform(dwell.update(cursor: point, time: now, target: resolved?.dwellTarget))
@@ -155,6 +162,11 @@ final class DragCoordinator {
         if case .groupWindow = p.source, !dropped { groups.memberDragEnded(p.window) }
         FileLog.shared.write("drag end window=\(p.window)")
         endPress(cancel: false)
+    }
+
+    /// Between drags only: the machine is idle once the last press has ended.
+    private func applySettings() {
+        if dwell.config.dwell != dwellDelay { dwell = DwellStateMachine(config: .init(dwell: dwellDelay)) }
     }
 
     private func endPress(cancel: Bool) {

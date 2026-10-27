@@ -34,7 +34,7 @@ struct TabStripView: View {
 
                 WindowControlsView(focused: model.focused, hovered: (model.hover?.x ?? .infinity) < StripLayout.tabsLeadingInset,
                                    close: actions.closeAll, minimize: actions.minimize, zoom: actions.fill)
-                    .frame(height: Metrics.topStripHeight)
+                    .frame(height: StripLayout.thickness(.top, size: model.options.size))
 
                 ForEach(Array(layout.visible.enumerated()), id: \.element) { slot, index in
                     let tab = model.tabs[index]
@@ -57,7 +57,7 @@ struct TabStripView: View {
                 if let x = model.insertion.flatMap(layout.markerPosition(for:)) {
                     Capsule().fill(Color.accentColor)
                         .frame(width: 3, height: 22)
-                        .offset(x: x - 1.5, y: (Metrics.topStripHeight - 22) / 2)
+                        .offset(x: x - 1.5, y: (StripLayout.thickness(.top, size: model.options.size) - 22) / 2)
                         .transition(.opacity)
                 }
 
@@ -200,7 +200,7 @@ private struct StripTab: View {
                     Image(nsImage: icon).resizable().frame(width: 16, height: 16)
                 }
                 renameField
-            } else if style == .iconOnly, tab.isActive, hovered {
+            } else if style == .iconOnly, tab.isActive, hovered, model.options.showsCloseButtons {
                 closeButton // narrow tabs: the active one trades its icon for × on hover (Chrome)
             } else if let icon = NSRunningApplication(processIdentifier: tab.pid)?.icon {
                 Image(nsImage: icon).resizable().frame(width: 16, height: 16)
@@ -213,13 +213,15 @@ private struct StripTab: View {
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
                 // Chrome's rule: always on the active tab, on hover for the others.
-                closeButton
-                    .opacity(tab.isActive || hovered ? 1 : 0)
-                    .animation(Motion.quickFade, value: hovered)
+                if model.options.showsCloseButtons {
+                    closeButton
+                        .opacity(tab.isActive || hovered ? 1 : 0)
+                        .animation(Motion.quickFade, value: hovered)
+                }
             }
         }
         .padding(.horizontal, style == .full ? 10 : 0)
-        .frame(maxWidth: .infinity, maxHeight: 26)
+        .frame(maxWidth: .infinity, maxHeight: StripLayout.thickness(.top, size: model.options.size) - 6)
         .background {
             if tab.isActive {
                 Capsule().fill(.clear).glassEffect(.regular, in: Capsule())

@@ -899,6 +899,33 @@ iTerm and Slack aren't installed, so they're untested.
 - Performance check against the §6.2 budgets in Instruments (Time Profiler, Allocations, Energy Log): 0% CPU and under 50 MB idle.
 - App icon and menu bar template icon: **supplied** (`Tabsome/AppIcon.icon`, `Tabsome/Assets.xcassets`, sources in `Design/Icon/`). Check them in the Dock, Finder, Settings, and the menu bar in light, dark, and tinted, and tune the glyph's glass and translucency in Icon Composer if needed. Delete the PNG `AppIcon` set if nothing uses it.
 
+#### Phase 6 progress
+Built in six parts, each committed once checked by hand:
+- **6a:** the rest of Settings › General and Tabs: dwell delay, middle-zone size, permission status, strip size, close buttons, asking before Close All, and tab min width
+- **6b:** app badges on tabs, with the 3-second Dock check and its setting
+- **6c:** Settings › Shortcuts (rebinding; adds the KeyboardShortcuts package) and Settings › About
+- **6d:** the first-time hint, VoiceOver labels, and keyboard navigation
+- **6e:** the motion pass: the animated quit cascade, Fill and return through proxies, the strip's corner notches, Reduce Motion, and Screen Recording denied
+- **6f:** the browser parity pass, the performance check (from a fresh launch), and the icons
+
+Check for Updates… and Report a Problem… stay in Phase 7 with Sparkle and the log viewer.
+
+**6a (2026-10-27): done.** Checked by hand: every setting below, at every strip size, and the snap-in fix.
+- **Settings › General** gains:
+  - **Making tabs:** "Pause before tabbing" (0.2–1 s, 0.45 s by default) and "Middle of a window" (30–70% of each side, 50% by default). Both take effect from the next drag.
+  - **Permissions:** Accessibility and Screen & System Audio Recording, each with a green check when allowed, or a button to open Privacy & Security.
+- **Settings › Tabs** gains:
+  - **Strip size:** Small, Medium (the measured size), or Large. Top is 28/32/38 pt tall, compact Left 34/40/48 pt wide (icons 24/28/34), and Left with names 150/180/220 pt wide. A change re-lays out every open group the way a placement change does: the outer frame stays put and the windows take what's left.
+  - **Minimum tab width** (Top only, 60–200 pt, 90 by default): narrower than this, tabs show only icons.
+  - **Show close buttons on tabs** (on by default). Off, tabs have no ×; the right-click menu still closes them.
+  - **Ask before closing all tabs** (on by default), the same setting as the alert's "Don't ask again".
+- Settings reopens on the pane it was left on.
+- Debug builds take two more scripted hooks, so layout can be checked without synthesized mouse input: `com.tabsome.debug.group` ("target,dragged" window IDs) and `com.tabsome.debug.strip` ("size[,placement]"). `com.tabsome.debug.settings` can name a pane.
+
+Found and fixed during the hand check: adding a small window (Finder) to a big group (Safari) showed the small snapshot stretched up to the group's size for the whole spring, then swapped it. The proxy now cross-fades to a snapshot at the final size as soon as one arrives, while the spring is still running (§5.9 step 4: the window has already landed behind the cover, so it can be captured at once). The size spring no longer bounces, so the picture doesn't overshoot its final size.
+
+Checked by script: every strip size in Top, Left, and Left with names, on a real group. 192 unit tests in total. The new ones cover each size's thickness and frame round trip, Medium matching the measured metrics, the tab min width deciding when names give way to icons, and the middle-zone size.
+
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
 - Developer ID signing, notarization (`notarytool`), and a stapled DMG (`create-dmg`).

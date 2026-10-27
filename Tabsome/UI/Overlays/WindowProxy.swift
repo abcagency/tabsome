@@ -102,19 +102,20 @@ final class WindowProxy {
         position.keyPath = "position"
         position.fromValue = NSValue(point: from.position)
         position.toValue = NSValue(point: CGPoint(x: target.midX, y: target.midY))
-        let size = base.copy() as! CASpringAnimation
+        // The size doesn't bounce: a picture overshooting its final size reads as zooming past it.
+        let size = Motion.snappySpring(bounce: 0)
         size.keyPath = "bounds.size"
         size.fromValue = NSValue(size: from.bounds.size)
         size.toValue = NSValue(size: target.size)
         position.duration = base.settlingDuration
-        size.duration = base.settlingDuration
+        size.duration = size.settlingDuration
         CATransaction.begin(); CATransaction.setDisableActions(true)
         layer.position = CGPoint(x: target.midX, y: target.midY)
         layer.bounds.size = target.size
         CATransaction.commit()
         layer.add(position, forKey: "position")
         layer.add(size, forKey: "size")
-        try? await Task.sleep(for: .seconds(base.settlingDuration))
+        try? await Task.sleep(for: .seconds(max(base.settlingDuration, size.settlingDuration)))
     }
 
     /// Swap to a snapshot taken at the final size, so nothing is left looking stretched.
