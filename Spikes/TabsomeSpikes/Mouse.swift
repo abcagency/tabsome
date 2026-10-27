@@ -3,6 +3,7 @@
 //   mouse middle X Y                     middle-click
 //   mouse drag X1 Y1 X2 Y2 [holdSeconds]  press, drag in steps, optionally hold, release
 //   mouse shot X Y W H name              capture a region of the screen (global, top-left)
+//   mouse burst X Y W H name N ms        N captures of a region, one every `ms` (for animations)
 
 import AppKit
 
@@ -37,8 +38,21 @@ enum Mouse {
                 await TabDrag.shoot(region: CGRect(x: n[0], y: n[1], width: n[2], height: n[3]), name: name)
                 finish()
             }
+        case "burst" where n.count >= 4 && a.count >= 8:
+            keepAlive = true
+            let name = a[5], count = Int(a[6]) ?? 10, ms = Double(a[7]) ?? 50
+            let region = CGRect(x: n[0], y: n[1], width: n[2], height: n[3])
+            Task { @MainActor in
+                let start = Date()
+                for i in 0..<count {
+                    await TabDrag.shoot(region: region, name: String(format: "%@-%02d", name, i))
+                    log(String(format: "frame %d at %.0f ms", i, Date().timeIntervalSince(start) * 1000))
+                    try? await Task.sleep(for: .milliseconds(Int(ms)))
+                }
+                finish()
+            }
         default:
-            log("usage: mouse click X Y | middle X Y | drag X1 Y1 X2 Y2 [hold] | shot X Y W H name")
+            log("usage: mouse click X Y | middle X Y | drag X1 Y1 X2 Y2 [hold] | shot X Y W H name | burst X Y W H name N ms")
         }
     }
 }

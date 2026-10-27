@@ -317,17 +317,30 @@ final class TabBarWindow {
     }
 
     /// Moves the strip to sit on `content`'s strip edge and orders it above that window.
-    func place(content: CGRect, above window: CGWindowID) {
-        follow(content: content)
+    func place(content: CGRect, above window: CGWindowID, animated: Bool = false) {
+        follow(content: content, animated: animated)
         reorder(above: window)
     }
 
     /// Frame only (live following during a drag).
-    func follow(content: CGRect) {
+    /// `animated`: glides with a window's proxy during Fill and return (§5.9), on the ease-out
+    /// curve that matches the spring's settle.
+    func follow(content: CGRect, animated: Bool = false) {
         contentSize = content.size
         let strip = StripLayout.frames(outer: StripLayout.outer(content: content, placement: placement), placement: placement).strip
-        panel.setFrame(ScreenGeometry.appKitRect(fromCG: strip), display: true)
-        backPanel.setFrame(ScreenGeometry.appKitRect(fromCG: StripLayout.panelFrame(strip: strip, placement: placement)), display: true)
+        let front = ScreenGeometry.appKitRect(fromCG: strip)
+        let back = ScreenGeometry.appKitRect(fromCG: StripLayout.panelFrame(strip: strip, placement: placement))
+        guard animated else {
+            panel.setFrame(front, display: true)
+            backPanel.setFrame(back, display: true)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Motion.stripGlideDuration
+            context.timingFunction = Motion.stripGlideCurve
+            panel.animator().setFrame(front, display: true)
+            backPanel.animator().setFrame(back, display: true)
+        }
     }
 
     /// `order(.above, relativeTo:)` plus the settle burst (Phase 0): apps raise their window

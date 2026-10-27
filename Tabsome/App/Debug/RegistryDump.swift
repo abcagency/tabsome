@@ -62,6 +62,7 @@ enum RegistryDump {
     private static var quitObserver: NSObjectProtocol?
     private static var groupObserver: NSObjectProtocol?
     private static var stripObserver: NSObjectProtocol?
+    private static var fillObserver: NSObjectProtocol?
 
     static func handleLaunchArguments(_ model: AppModel) {
         // Scripted checks can ask for a real Quit (applicationShouldTerminate and all).
@@ -70,11 +71,16 @@ enum RegistryDump {
             RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
         }
         // Scripted layout checks without synthesized input: "target,dragged" tabs one window
-        // into another, and "size[,placement]" sets the strip (e.g. "large,left").
+        // into another, "size[,placement]" sets the strip (e.g. "large,left"), and a window ID
+        // on com.tabsome.debug.fill clicks its group's green button.
         groupObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.group"), object: nil, queue: .main) { note in
             let ids = (note.object as? String ?? "").split(separator: ",").compactMap { CGWindowID($0) }
             guard ids.count == 2 else { return }
             MainActor.assumeIsolated { model.groups.merge(dragged: ids[1], into: ids[0], dropFrame: nil, snapshot: nil) }
+        }
+        fillObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.fill"), object: nil, queue: .main) { note in
+            guard let id = (note.object as? String).flatMap({ CGWindowID($0) }) else { return }
+            MainActor.assumeIsolated { if let g = model.groups.group(containing: id) { model.groups.toggleFill(g.id) } }
         }
         stripObserver = DistributedNotificationCenter.default().addObserver(forName: .init("com.tabsome.debug.strip"), object: nil, queue: .main) { note in
             let parts = (note.object as? String ?? "").split(separator: ",").map(String.init)

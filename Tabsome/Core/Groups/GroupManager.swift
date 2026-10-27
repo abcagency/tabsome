@@ -175,10 +175,10 @@ final class GroupManager {
                     return self.scheduleSettleCheck(gid)
                 }
                 Task { @MainActor in
-                    await self.spring(proxy, of: active, to: self.landing(active, at: g.content))
+                    await self.travel(proxy, of: active, to: self.landing(active, at: g.content))
                     self.activateWindow(active)
                     self.scheduleSettleCheck(gid)
-                    await proxy.fadeOut()
+                    await self.reveal(proxy)
                 }
             }
         }
@@ -190,8 +190,20 @@ final class GroupManager {
     /// moment, not all the way to the group's size.
     private func spring(_ proxy: WindowProxy, of id: CGWindowID, to frame: CGRect) async {
         let springing = Task { await proxy.spring(to: frame) }
-        if let final = await WindowCapture.capture(id) { proxy.crossfade(to: final) }
+        if let final = await WindowCapture.capturePainted(id) { proxy.crossfade(to: final) }
         await springing.value
+    }
+
+    /// A proxy's picture goes where its window went: one spring, or with Reduce Motion no travel
+    /// at all; it stays put and `reveal` cross-fades it away as the real window appears in its
+    /// new place, the way macOS handles Reduce Motion (§5.9).
+    private func travel(_ proxy: WindowProxy, of id: CGWindowID, to frame: CGRect) async {
+        guard !Motion.reduced else { return }
+        await spring(proxy, of: id, to: frame)
+    }
+
+    private func reveal(_ proxy: WindowProxy) async {
+        await proxy.fadeOut(duration: Motion.reduced ? Motion.reducedCrossFadeDuration : Motion.proxyRevealDuration)
     }
 
     private func canAbsorb(_ count: Int, into t: CGWindowID) -> Bool {
@@ -199,7 +211,7 @@ final class GroupManager {
     }
 
     private func makeProxy(for id: CGWindowID, image: CGImage?, at frame: CGRect?) -> WindowProxy? {
-        guard animates, !Motion.reduced, let entry = registry.windows[id] else { return nil }
+        guard animates, let entry = registry.windows[id] else { return nil }
         let from = frame ?? entry.window.frame
         let proxy = WindowProxy(image: image, appPID: entry.app.pid, appName: entry.app.name, on: from)
         proxy.show(at: from)
@@ -337,15 +349,67 @@ final class GroupManager {
 
     /// Green button: fill the usable screen area, or go back (§5.11). Phase 4 animates presets.
     func toggleFill(_ gid: UUID) {
-        guard var g = groups[gid] else { return }
+        guard var g = groups[gid], !resizing.contains(gid) else { return }
+        let from = g.content
         let visible = visibleFrame(containing: g.outer)
         let next = GroupGeometry.fillToggle(outer: g.outer, previous: g.previousOuter, visibleFrame: visible)
         g.previousOuter = next.previous
         g.content = StripLayout.frames(outer: next.outer, placement: g.placement).content
         groups[gid] = g
         markSettling(gid)
-        strips[gid]?.place(content: g.content, above: g.activeID)
-        syncMembers(of: gid, reconcile: true, activeFirst: true) { self.scheduleSettleCheck(gid) }
+        guard animates, !g.isMinimized, let entry = registry.windows[g.activeID] else {
+            strips[gid]?.place(content: g.content, above: g.activeID)
+            return syncMembers(of: gid, reconcile: true, activeFirst: true) { self.scheduleSettleCheck(gid) }
+        }
+        animateResize(gid, from: from, active: entry)
+    }
+
+    /// Groups whose Fill or return is animating; another click waits until it's done.
+    @ObservationIgnored private var resizing: Set<UUID> = []
+
+    /// Fill and return through a proxy, the "park" choreography (§5.9): nothing covers the new
+    /// frame, so every tab waits in the screen's corner while a picture of the active one springs
+    /// there and the strip follows. The active window is resized while it waits, so the picture
+    /// switches to one at the final size early in the spring instead of staying stretched. Then
+    /// the windows move in and the picture fades. With Reduce Motion the picture stays put and
+    /// fades as the windows appear in their new place.
+    private func animateResize(_ gid: UUID, from: CGRect, active entry: WindowRegistry.Entry) {
+        resizing.insert(gid)
+        let active = entry.id
+        Task { @MainActor in
+            let image = await WindowCapture.capture(active)
+            guard let g = self.groups[gid], g.activeID == active else {
+                self.resizing.remove(gid)
+                return
+            }
+            let proxy = WindowProxy(image: image, appPID: entry.app.pid, appName: entry.app.name, on: from)
+            proxy.show(at: self.landing(active, at: from))
+            let finish = {
+                self.syncMembers(of: gid, reconcile: true, activeFirst: true) {
+                    self.resizing.remove(gid)
+                    if let g = self.groups[gid] { self.activateWindow(g.activeID) }
+                    self.scheduleSettleCheck(gid)
+                    Task { @MainActor in await self.reveal(proxy) }
+                }
+            }
+            if Motion.reduced {
+                self.strips[gid]?.place(content: g.content, above: active)
+                return finish()
+            }
+            self.tucked.insert(gid)
+            for id in g.inactive { self.park(id, from: g) }
+            let screen = self.screenFrame(containing: g.outer)
+            let others = NSScreen.screens.map { ScreenGeometry.cgRect(fromAppKit: $0.frame) }.filter { $0 != screen }
+            let origin = GroupGeometry.parkingOrigin(screen: screen, size: g.content.size, otherScreens: others)
+            self.setFrame(active, CGRect(origin: origin, size: g.content.size)) { _ in
+                Task { @MainActor in
+                    if let final = await WindowCapture.capturePainted(active) { proxy.crossfade(to: final) }
+                }
+            }
+            self.strips[gid]?.place(content: g.content, above: active, animated: true)
+            await proxy.spring(to: self.landing(active, at: g.content))
+            finish()
+        }
     }
 
     // MARK: Tear-out (§5.7)
@@ -398,8 +462,8 @@ final class GroupManager {
             self.activateWindow(t.window)
             guard let proxy = t.proxy else { return }
             Task { @MainActor in
-                if let landed { await proxy.spring(to: landed) }
-                await proxy.fadeOut()
+                if let landed, !Motion.reduced { await proxy.spring(to: landed) }
+                await self.reveal(proxy)
             }
         }
     }
@@ -454,8 +518,8 @@ final class GroupManager {
             }
             guard let proxy else { return }
             Task { @MainActor in
-                await proxy.spring(to: self.landing(active, at: g.content))
-                await proxy.fadeOut()
+                if !Motion.reduced { await proxy.spring(to: self.landing(active, at: g.content)) }
+                await self.reveal(proxy)
             }
         }
     }
@@ -703,6 +767,8 @@ final class GroupManager {
         // bring the count to zero while other windows are still to come.
         var moves: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
         var raises: [(id: CGWindowID, pid: pid_t)] = []
+        // Windows on screen in the group frame fan out through proxies, bottom of the stack first.
+        var flights: [(entry: WindowRegistry.Entry, from: CGRect, to: CGRect)] = []
         for g in all {
             let order = [g.activeID] + g.inactive
             let visible = visibleFrame(containing: g.outer)
@@ -715,18 +781,61 @@ final class GroupManager {
                 moves.append((id, entry.app.pid, frame))
             }
             if !g.isMinimized, let entry = registry.windows[g.activeID] { raises.append((g.activeID, entry.app.pid)) }
+            if !g.isMinimized {
+                for id in onScreen.reversed() where !misfitParked.contains(id) {
+                    guard let entry = registry.windows[id], let to = plan[id] else { continue }
+                    flights.append((entry, landing(id, at: g.content), landing(id, at: to)))
+                }
+            }
         }
-        let tracker = RestoreTracker(done: done)
-        tracker.pending = moves.count
-        for m in moves {
-            system.perform(.setFrame(m.frame), window: m.id, pid: m.pid) { _ in tracker.completeOne() }
+        misfitParked.removeAll()
+        var proxies: [WindowProxy] = []
+        let tracker = RestoreTracker { allLanded in
+            // The real windows are in place: the pictures over them fade, then Tabsome is done.
+            guard !proxies.isEmpty else { return done(allLanded) }
+            var fading = proxies.count
+            for proxy in proxies {
+                proxy.fadeOut {
+                    fading -= 1
+                    if fading == 0 { done(allLanded) }
+                }
+            }
         }
-        for r in raises { system.perform(.raise, window: r.id, pid: r.pid, completion: nil) }
         FileLog.shared.write("restore all groups=\(all.count) windows=\(moves.count)")
         if moves.isEmpty { return tracker.finish(allLanded: true) }
         // A run-loop timer in common modes, so it fires inside Quit's nested run loop too.
         let cap = Timer(timeInterval: timeout, repeats: false) { _ in MainActor.assumeIsolated { tracker.finish(allLanded: false) } }
         RunLoop.main.add(cap, forMode: .common)
+
+        var sent = false
+        let send = {
+            guard !sent else { return }
+            sent = true
+            tracker.pending = moves.count
+            for m in moves {
+                self.system.perform(.setFrame(m.frame), window: m.id, pid: m.pid) { _ in tracker.completeOne() }
+            }
+            for r in raises { self.system.perform(.raise, window: r.id, pid: r.pid, completion: nil) }
+        }
+        guard animates, !Motion.reduced, !flights.isEmpty else { return send() }
+        // Quit fans the tabs out (§5.12, §5.9): each window's picture springs from the group frame
+        // to its place in the cascade while the real windows stay stacked out of sight, then the
+        // windows move and the pictures fade. Callbacks and common-mode timers only, never a
+        // task: Quit waits in a nested run loop. Captures that don't come within 0.35 s get icon
+        // cards, and the 2 s cap still applies to the whole thing.
+        WindowCapture.capture(flights.map(\.entry.id), timeout: 0.35) { images in
+            guard tracker.isWaiting else { return }
+            var springing = flights.count
+            for f in flights {
+                let proxy = WindowProxy(image: images[f.entry.id], appPID: f.entry.app.pid, appName: f.entry.app.name, on: f.from)
+                proxy.show(at: f.from)
+                proxies.append(proxy)
+                proxy.spring(to: f.to) {
+                    springing -= 1
+                    if springing == 0 { send() }
+                }
+            }
+        }
     }
 
     /// Permission revoked: AX is gone, so just drop everything Tabsome drew (§5.8).
@@ -1275,6 +1384,9 @@ private final class RestoreTracker {
     private var done: ((Bool) -> Void)?
 
     init(done: @escaping (Bool) -> Void) { self.done = done }
+
+    /// Not finished yet (by every window landing, or by the time cap).
+    var isWaiting: Bool { done != nil }
 
     func completeOne() {
         pending -= 1

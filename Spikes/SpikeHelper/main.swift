@@ -80,7 +80,9 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     var windows: [NSWindow] = []
     func applicationDidFinishLaunching(_ n: Notification) {
         if role == "badge" {
-            let w = makeWindow("BADGE", nsRect(160, 200, 640, 400), color: .systemRed.withAlphaComponent(0.25))
+            // Opaque and light, so animation checks see real edges and colors (Phase 6e).
+            let w = makeWindow("BADGE", nsRect(160, 200, 640, 400), color: NSColor(calibratedRed: 1, green: 0.93, blue: 0.85, alpha: 1))
+            w.appearance = NSAppearance(named: .aqua)
             w.orderFront(nil)
             windows = [w]
             NSApp.dockTile.badgeLabel = "3"
@@ -92,7 +94,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             return hlog("ready pid \(getpid())")
         }
         if role == "quiet" {
-            let w = makeWindow("LEAK TEST", nsRect(40, 600, 220, 140), color: .systemGray.withAlphaComponent(0.3))
+            let w = makeWindow("LEAK TEST", nsRect(40, 600, 220, 140), color: NSColor(calibratedRed: 0.85, green: 0.92, blue: 1, alpha: 1))
+            w.appearance = NSAppearance(named: .aqua)
             w.orderFront(nil)
             windows = [w]
             return hlog("ready pid \(getpid())")

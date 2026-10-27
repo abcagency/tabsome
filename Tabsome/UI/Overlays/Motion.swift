@@ -21,6 +21,13 @@ enum Motion {
 
     /// Proxy hand-off: the snapshot fades out over this once the real window is in place.
     static let proxyRevealDuration: TimeInterval = 0.1
+    /// Reduce Motion: a window doesn't travel; its picture fades out over this while the real
+    /// window appears in its new place (§5.9), as macOS does.
+    static let reducedCrossFadeDuration: TimeInterval = 0.2
+    /// The strip gliding with a proxy (Fill and return): AppKit animates window frames on a
+    /// curve, not a spring, so this ease-out ends with `snappySpring`'s visible motion.
+    static let stripGlideDuration: TimeInterval = 0.32
+    static var stripGlideCurve: CAMediaTimingFunction { CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1) }
 
     static var reduced: Bool { SystemAccessibility.shared.reduceMotion }
     private static let crossFade = Animation.easeInOut(duration: 0.2)

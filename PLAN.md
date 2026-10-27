@@ -351,7 +351,7 @@ Every row matches Safari/Chrome unless it says otherwise (§1, "works like brows
 3. Underneath, move the real window to its final frame with one AX write while it's hidden:
    - **cover:** when the destination is covered by the group's active window (snap-in), activate that window so the real one goes behind it, then move.
    - **park:** when nothing covers the destination (layout presets, if a group flyout returns), corner-park the real window during the spring, then move it at the end.
-4. When the real window has landed (within 8 pt and unchanged across two polls, never an exact match), take a **second snapshot at the final size** (ScreenCaptureKit captures covered windows) and cross-fade the proxy's contents to it during the spring. A snapshot stretched to a new size reads as "scaled up" (seen in Phase 0).
+4. When the real window has landed (within 8 pt and unchanged across two polls, never an exact match), take a **second snapshot at the final size** (ScreenCaptureKit captures covered windows) and cross-fade the proxy's contents to it during the spring. A snapshot stretched to a new size reads as "scaled up" (seen in Phase 0), so **the picture is never scaled** (Phase 6e): it stays at its real size, anchored top-left, and the frame's new area fills with the window's own edge color, like a live resize. A second snapshot counts only once the app has painted the window's far edges.
 5. Retarget the spring to the frame the window actually took (apps like Terminal round it), then raise the real window and fade the proxy out over 0.1 s.
 
 This needs the **Screen Recording permission**, which is **optional** and requested in onboarding with a plain explanation (nothing is saved or sent). Without it, the proxy is a glass card showing the app's icon and name. That's still smooth, just not a live picture. Tabsome's own overlays (highlight, strip, tabs) are ours, so they animate natively with no permission needed.
@@ -427,7 +427,7 @@ In Top mode, the left end of the tab strip has the three standard macOS window b
 4. **Minimized groups:** the minimized window stays in the Dock where the user put it. Its parked group-mates are brought back and cascaded on screen, so nothing ends up out of sight.
 5. Delete the recovery file (a clean exit leaves nothing to repair) and exit.
 
-**Timing:** all of this happens in `applicationShouldTerminate`. Tabsome replies `.terminateLater`, then confirms once the windows are restored. The restore is capped at **2 seconds** in total, so a hung app (§6.2 P1) can't stop Tabsome from quitting; any window that didn't respond is fixed by the recovery file on the next launch. The windows move with `Motion.smooth` (instant under Reduce Motion).
+**Timing:** all of this happens in `applicationShouldTerminate`. Tabsome replies `.terminateLater`, then confirms once the windows are restored. The restore is capped at **2 seconds** in total, so a hung app (§6.2 P1) can't stop Tabsome from quitting; any window that didn't respond is fixed by the recovery file on the next launch. The windows fan out through proxies with `Motion.snappy` (instant under Reduce Motion; Phase 6e).
 
 **Every way Tabsome can stop:**
 
@@ -658,9 +658,9 @@ Bugs found by testing the real app and fixed:
 Also built here, ahead of Phase 4: activating an inactive tab's app (⌘Tab, a click) counts as a tab switch, a member entering full screen leaves its group, and a window can be dropped onto an existing group to add a tab. Without the first two, stacked tabs would break as soon as you clicked around.
 
 Deviations and notes for later phases:
-- On Quit, windows move into the cascade instantly; animating them needs one proxy per window (Phase 6 motion pass).
-- Fill and return are instant; animating them through proxies is left for the Phase 6 motion pass (the flyout that would have brought it was dropped in 4c).
-- Small notches can show where the strip's square bottom corners meet the window's rounded top corners (Phase 6 polish).
+- On Quit, windows move into the cascade instantly; animating them needs one proxy per window (Phase 6 motion pass). *Done in 6e.*
+- Fill and return are instant; animating them through proxies is left for the Phase 6 motion pass (the flyout that would have brought it was dropped in 4c). *Done in 6e.*
+- Small notches can show where the strip's square bottom corners meet the window's rounded top corners (Phase 6 polish). *Fixed in Phase 4 by the corner fillets.*
 - Grouped windows can't yet be dropped onto another group (Phase 4: merge a group into a group).
 - Synthesized checks activate other apps' windows, so they can catch the user's keystrokes; run them only while hands are off the keyboard (it happened once, harmlessly, with a scratch file).
 
@@ -959,6 +959,18 @@ Checked by script: both panes fit without scrolling. 203 unit tests in total. Th
 - The spikes app gained `axdump`, which prints an app's accessibility tree, and `axdump <app> press <label> [n] [action]`.
 
 Checked by script: the accessibility tree in Top and Left, pressing a tab through accessibility to switch, and Move Tab Right. 207 unit tests in total. The new ones cover when the hint shows and what it says, and the tab's VoiceOver value.
+
+**6e (2026-10-27): done.** Checked by hand: Fill and return, Quit and Pause, snap-in both ways, and Reduce Motion.
+- **Fill and return** animate through a proxy, the "park" choreography (§5.9). Every tab steps into the screen's corner while a picture of the active one springs to the new frame and the strip glides along. The active window is resized while it waits, so the picture switches to one at the final size during the spring. Then the windows move in and the picture fades. A second click waits until the first is done.
+- **Quit and Pause** fan the tabs out through proxies (§5.12). Each window's picture springs from the group frame to its place in the cascade while the real windows stay stacked out of sight; then the windows move and the pictures fade. Quit waits in a nested run loop, so this path uses only callbacks and common-mode run-loop timers, never a task. All the captures happen at once and wait at most 0.35 s (late ones get icon cards). The 2 s cap still covers everything. Minimized groups and corner-parked tabs just move.
+- **Pictures are never scaled.** A proxy shows its snapshot at its real size, anchored top-left, over the window's own edge color (sampled from the snapshot), so a growing or shrinking proxy looks like a live resize rather than a zoom. This also fixes the leftover stretch on snap-in. A final-size snapshot is used only once the app has painted the window's far edges (up to 4 tries, 60 ms apart); a capture taken right after a resize can be blank beyond the old size.
+- **The size doesn't bounce** in any proxy spring; position keeps `Motion.snappy`'s small bounce.
+- **Reduce Motion:** snap-in, tear-out, new groups, and Fill no longer travel. The picture stays put and cross-fades away over 0.2 s as the real window appears in its new place. Quit stays instant (§5.12).
+- **Screen Recording denied:** the icon card's color fills the proxy as it moves and the icon stays centered at its own size, instead of the whole card being stretched.
+- **The strip's corner notches** were already fixed in Phase 4 by the corner fillets.
+- Debug builds: `com.tabsome.debug.fill` (a window ID) clicks its group's green button, and `TabsomeDebugNoCapture` acts as if Screen Recording were denied. The spikes app gained `mouse burst`, which captures a screen region several times in a row. SpikeHelper's `badge` and `quiet` windows are now opaque, so animation checks see real edges.
+
+Checked by script, frame by frame: Fill, return, the quit fan-out, and Fill with icon cards, with no stretched frames. 210 unit tests in total. The new ones cover the edge color and the painted-capture check.
 
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
