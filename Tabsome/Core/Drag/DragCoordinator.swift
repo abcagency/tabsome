@@ -14,6 +14,7 @@ final class DragCoordinator {
     private let monitor = DragMonitor()
     private let highlight = DropHighlightWindow()
     private let hint = HintWindow()
+    private let escape = EscapeKey()
     private var dwell = DwellStateMachine()
     private let ownPID = ProcessInfo.processInfo.processIdentifier
 
@@ -31,6 +32,8 @@ final class DragCoordinator {
         let downFrame: CGRect
         var dragging = false
         var lastTarget: DropTargetResolver.Resolved?
+        /// Esc was pressed: the window keeps moving, but it won't tab anywhere.
+        var escaped = false
     }
 
     private var press: Press?
@@ -53,6 +56,7 @@ final class DragCoordinator {
         self.registry = registry
         self.groups = groups
         monitor.onEvent = { [weak self] event, _ in self?.handle(event) }
+        escape.onPress = { [weak self] in self?.escapePressed() }
     }
 
     func start() { monitor.start() }
@@ -68,6 +72,7 @@ final class DragCoordinator {
         endPress(cancel: true)
         applySettings()
         press = Press(window: window, source: .tab(group, count: count), downFrame: .zero, dragging: true)
+        escape.isArmed = true
     }
 
     func tabDragMoved(to point: CGPoint) {
@@ -76,6 +81,27 @@ final class DragCoordinator {
     }
 
     /// Where the tab was dropped: another group's strip, a window's middle (armed), or nowhere.
+    /// Esc: the tab drag ends with no drop.
+    func cancelTabDrag() {
+        guard press?.source.isTab == true else { return }
+        endPress(cancel: true)
+    }
+
+    /// Esc during a drag (Chrome's tab drags): a torn-out tab goes back; a window being dragged
+    /// keeps moving, but its highlight goes and letting go won't tab it.
+    private func escapePressed() {
+        guard var p = press, p.dragging else { return }
+        escape.isArmed = false
+        if p.source.isTab { return groups.tearOffEscaped() }
+        p.escaped = true
+        press = p
+        perform(dwell.cancel())
+        tickTimer?.invalidate()
+        trailingResolve?.invalidate()
+        hint.hide()
+        FileLog.shared.write("drag cancelled by Esc window=\(p.window)")
+    }
+
     func tabDragEnded() -> DwellStateMachine.Effect? {
         guard let p = press, p.source.isTab else { return nil }
         let effects = dwell.mouseUp()
@@ -139,18 +165,28 @@ final class DragCoordinator {
                 if case .groupWindow = p.source { groups.memberDragMoved(p.window, bounds: current) }
             }
         }
+        if p.escaped {
+            press = p
+            return
+        }
         if Eligibility.secureInputActive {
             perform(dwell.cancel())
             press = nil
             return
         }
         let resolved = DropTargetResolver.resolve(cursor: point, windows: ScreenWindows.onScreen(), dragged: p.window, ownPID: ownPID,
-                                                  strip: { [groups] w in groups.stripHit(panel: w.id, cursor: point, excluding: p.source.group, incoming: incoming(p)) },
+                                                  strip: { [groups] w in
+                                                      // Torn-out tabs may go back into their own strip; a dragged group can't.
+                                                      groups.stripHit(panel: w.id, cursor: point, excluding: p.source.isTab ? nil : p.source.group,
+                                                                      returning: p.source.isTab ? p.source.group : nil, incoming: incoming(p))
+                                                  },
                                                   isEligible: { id in self.eligibleTarget(id, for: p) }, inset: middleInset)
         p.lastTarget = resolved
         press = p
         perform(dwell.update(cursor: point, time: now, target: resolved?.dwellTarget))
         updateHint()
+        // A window drag takes Esc only while there's a tabbing to cancel; a tab drag always.
+        escape.isArmed = p.source.isTab || dwell.state != .idle
     }
 
     /// The first-time hint follows the dwell: "pause" while hovering, "let go" once armed.
@@ -167,7 +203,7 @@ final class DragCoordinator {
             press = nil
             return
         }
-        let effects = dwell.mouseUp()
+        let effects = p.escaped ? [] : dwell.mouseUp()
         let dropped = effects.contains { if case .drop = $0 { true } else if case .dropOnStrip = $0 { true } else { false } }
         perform(effects)
         if case .groupWindow = p.source, !dropped { groups.memberDragEnded(p.window) }
@@ -183,6 +219,7 @@ final class DragCoordinator {
     private func endPress(cancel: Bool) {
         if cancel { perform(dwell.cancel()) }
         hint.hide()
+        escape.isArmed = false
         press = nil
         trailingResolve?.invalidate()
         tickTimer?.invalidate()

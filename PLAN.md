@@ -972,6 +972,19 @@ Checked by script: the accessibility tree in Top and Left, pressing a tab throug
 
 Checked by script, frame by frame: Fill, return, the quit fan-out, and Fill with icon cards, with no stretched frames. 210 unit tests in total. The new ones cover the edge color and the painted-capture check.
 
+**6f (2026-10-27): done.** Checked by hand: Esc during tab and window drags, dropping tabs back on their own strip, and the icons. Phase 6 is complete.
+- **Browser parity:** every row of the §1 table is implemented. Checking each against Chrome found two differences, now fixed:
+  - **Esc cancels a drag**, as in Chrome. During a tab drag it sends the tab back. During a window drag over a target it removes the highlight, and letting go then won't tab the window (macOS still moves it). Esc is a Carbon hot key registered only while there's something to cancel (S5: no Input Monitoring), so it reaches apps the rest of the time.
+  - **A torn-out tab dragged back over its own strip** shows the insertion marker and goes in at that spot. Before, it went back to where it started, or became its own window when let go more than 20 pt from the strip.
+- **Performance** (§6.2), measured with `footprint` and the process's CPU time on a 5K display:
+  - Fresh launch, idle: **21 MB**, and no CPU used in a minute.
+  - A group open, idle: 31 MB; 0.06 s of CPU a minute, the 3-second Dock badge check (§5.14).
+  - After opening every Settings pane: 47 MB, staying there after Settings closes. Tabsome's live heap is only 24 MB; the rest is fragmented malloc pages from SwiftUI, which `malloc_zone_pressure_relief` doesn't return (tried, it freed nothing). With a group open and Fill on a full 5K screen as well, it reached 54 MB (a full-screen capture is about 60 MB while it lasts).
+  - So the budget holds at idle and in normal use, but a long session with Settings and large animations ends a little over it. Drag-time CPU and Animation Hitches need Instruments by hand.
+- **Icons:** the Icon Composer icon (`AppIcon.icon`) is the whole app icon. Without the PNG `AppIcon` set the built `AppIcon.icns` was byte-for-byte the same, so the PNG set is deleted. The menu bar glyph renders as a template image. The icon in dark and tinted appearances is a hand check.
+
+213 unit tests in total. The new ones cover moving a torn-out tab, or a selection, back into its own strip at the marker.
+
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
 - Developer ID signing, notarization (`notarytool`), and a stapled DMG (`create-dmg`).

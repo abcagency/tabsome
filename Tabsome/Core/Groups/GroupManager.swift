@@ -279,9 +279,12 @@ final class GroupManager {
     }
 
     /// For the drag coordinator: a group's strip under the cursor and where a drop would land.
-    func stripHit(panel: CGWindowID, cursor: CGPoint, excluding: UUID?, incoming: Int) -> DropTargetResolver.StripHit? {
+    /// `returning`: torn-out tabs from this group, which may go back into their own strip at
+    /// any spot (Chrome; Phase 6f) and add nothing to its count.
+    func stripHit(panel: CGWindowID, cursor: CGPoint, excluding: UUID?, returning: UUID? = nil, incoming: Int) -> DropTargetResolver.StripHit? {
         guard let (gid, strip) = strips.first(where: { $0.value.windowNumber == panel }), gid != excluding,
-              let g = groups[gid], !g.isMinimized, g.canAccept(incoming), let index = strip.insertIndex(at: cursor) else { return nil }
+              let g = groups[gid], !g.isMinimized, gid == returning || g.canAccept(incoming),
+              let index = strip.insertIndex(at: cursor) else { return nil }
         return .init(target: g.activeID, index: index)
     }
 
@@ -448,6 +451,8 @@ final class GroupManager {
         switch targeting?.tabDragEnded() {
         case .drop(let target)?:
             return moveTabs(t.windows, active: t.window, into: target, at: nil, from: frame, proxy: t.proxy)
+        case .dropOnStrip(let target, let index)? where groupOf[target] == t.group:
+            return returnTabs(t, to: index)
         case .dropOnStrip(let target, let index)?:
             return moveTabs(t.windows, active: t.window, into: target, at: index, from: frame, proxy: t.proxy)
         default:
@@ -468,11 +473,44 @@ final class GroupManager {
         }
     }
 
+    /// Let go close to the strip: back where it was, or at the marker if it's over the strip.
     func tearOffCancelled() {
         guard let t = tearOff else { return }
         tearOff = nil
-        _ = targeting?.tabDragEnded()
+        if case .dropOnStrip(let target, let index)? = targeting?.tabDragEnded(), groupOf[target] == t.group {
+            return returnTabs(t, to: index)
+        }
         Task { @MainActor in await t.proxy?.fadeOut() }
+    }
+
+    /// Esc during a tab drag (Chrome): nothing moves; the ghost goes back to the tab's place.
+    func tearOffEscaped() {
+        guard let t = tearOff else { return }
+        tearOff = nil
+        targeting?.cancelTabDrag()
+        FileLog.shared.write("tear out cancelled by Esc window=\(t.window)")
+        sendBack(t.proxy, of: t.window, in: t.group)
+    }
+
+    /// Torn-out tabs dropped back on their own strip go in at the marker (Chrome; Phase 6f).
+    private func returnTabs(_ t: (windows: [CGWindowID], window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize, ghost: CGSize), to index: Int) {
+        guard var g = groups[t.group] else { t.proxy?.dismiss(); return }
+        g.move(t.windows, to: index)
+        g.activate(t.window)
+        groups[t.group] = g
+        FileLog.shared.write("tabs=\(t.windows.count) back into their strip at \(index)")
+        refreshStrip(t.group)
+        activateWindow(t.window)
+        sendBack(t.proxy, of: t.window, in: t.group)
+    }
+
+    /// A tear-out ghost springs back into its group's frame and fades.
+    private func sendBack(_ proxy: WindowProxy?, of id: CGWindowID, in gid: UUID) {
+        guard let proxy else { return }
+        Task { @MainActor in
+            if let g = self.groups[gid], !Motion.reduced { await proxy.spring(to: self.landing(id, at: g.content)) }
+            await self.reveal(proxy)
+        }
     }
 
     /// A tab leaves its group for another window or group (dragged there, or picked from "+").

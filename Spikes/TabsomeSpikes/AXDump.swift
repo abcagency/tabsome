@@ -22,7 +22,10 @@ enum AXDump {
             guard let label = a.first else { return log("press needs a label") }
             let n = a.count > 1 ? Int(a[1]) ?? 1 : 1
             let action = a.count > 2 ? a[2] : kAXPressAction
-            let found = children(app, kAXWindowsAttribute).flatMap { all($0) }.filter { string($0, kAXDescriptionAttribute) == label }
+            // "subrole:AXCloseButton" matches by subrole instead of label.
+            let found = children(app, kAXWindowsAttribute).flatMap { all($0) }.filter {
+                label.hasPrefix("subrole:") ? string($0, kAXSubroleAttribute) == String(label.dropFirst(8)) : string($0, kAXDescriptionAttribute) == label
+            }
             guard found.count >= n else { return log("found \(found.count) \"\(label)\"") }
             var names: CFArray?
             AXUIElementCopyActionNames(found[n - 1], &names)

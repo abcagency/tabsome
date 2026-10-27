@@ -60,6 +60,16 @@ nonisolated struct TabGroup: Equatable, Identifiable {
         members.insert(id, at: min(max(index, 0), members.count))
     }
 
+    /// Several tabs (in their strip order) to an insertion point counted with them still in
+    /// place, as the strip's insertion marker counts it: a torn-out selection dropped back on
+    /// its own strip.
+    mutating func move(_ ids: [CGWindowID], to index: Int) {
+        let moving = members.filter { ids.contains($0) }
+        let before = members.prefix(max(0, min(index, members.count))).filter { ids.contains($0) }.count
+        members.removeAll { ids.contains($0) }
+        members.insert(contentsOf: moving, at: min(max(index - before, 0), members.count))
+    }
+
     /// For "Close Other Tabs" / "Close Tabs to the Right" (§5.7). In Left mode "right" means below.
     func others(than id: CGWindowID) -> [CGWindowID] { members.filter { $0 != id } }
     func toTheRight(of id: CGWindowID) -> [CGWindowID] {
