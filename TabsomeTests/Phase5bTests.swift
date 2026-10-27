@@ -130,6 +130,23 @@ struct ConcealmentTests {
         #expect(parks(2) == 0)
     }
 
+    @Test func animationsAimForTheSizeAWindowCanTake() throws {
+        // Calculator can't grow to the group's size: its proxy shouldn't either.
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        let g = try #require(manager.group(containing: 1))
+        #expect(manager.landing(2, at: g.content) == CGRect(origin: g.content.origin, size: CGSize(width: 600, height: 500)))
+        #expect(manager.landing(1, at: g.content) == g.content)
+    }
+
+    @Test func aTornOutTabLandsAtItsOwnSize() {
+        manager.merge(dragged: 2, into: 1, dropFrame: nil, snapshot: nil)
+        system.clearCommands()
+        manager.tearOffBegan(2, cursor: CGPoint(x: 700, y: 500))
+        manager.tearOffEnded(cursor: CGPoint(x: 700, y: 500))
+        let asked = system.commands.compactMap { c, w -> CGSize? in if w == 2, case .setFrame(let f) = c { f.size } else { nil } }
+        #expect(asked.last == CGSize(width: 600, height: 500))
+    }
+
     @Test func fittingTabsStayStacked() {
         manager.merge(dragged: 3, into: 1, dropFrame: nil, snapshot: nil)
         system.clearCommands()

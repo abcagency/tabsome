@@ -843,6 +843,35 @@ Also built, and covered by the tests:
 - fight counting, and a fight removing the window
 - exclusion removing windows from groups and from "+"
 
+**5d (2026-10-27): done. Phase 5 is complete.**
+
+**Leak test (P6):** `scripts/leak-test.sh` launches and quits SpikeHelper 100 times while Tabsome runs. SpikeHelper uses its "quiet" role, launched hidden, so it never takes focus. The script compares Tabsome before and after:
+
+| | Before | During | After |
+|---|---|---|---|
+| Threads | 12 | 13 (the helper's AX thread) | 12 |
+| Open files | 68 | 68 | 68 |
+| Footprint | 51 MB | 51 MB | 51 MB |
+| `leaks` | | | 0 leaks |
+
+The 100 cycles took 84 s. Idle CPU afterwards was 0.0%.
+
+**QA matrix (§9)** checked by hand, adding to what 5a–5c covered:
+- Chrome, Firefox, Terminal, VS Code, Mail, Xcode, Preview, and Notes, in same-app and cross-app groups
+- System Settings refused (it's excluded by default)
+- full screen leaving a group
+- quitting a member's app
+- the Appearance settings, including live light/dark switching, Increase Contrast, and Reduce Transparency
+- quitting Tabsome with a minimized group and one with a parked tab: every window comes back open and separate
+
+iTerm and Slack aren't installed, so they're untested.
+
+**Found by hand and fixed:** a window that can't take the group's size (Calculator) seemed to zoom up to the group's size and back when it joined, left, or was torn out. The animation proxy was springing to the group frame. Proxies now spring to `landing(_:at:)`, the size the window will actually take according to its last answer (§5.9 step 5). A torn-out tab's ghost and its landing use that size too. A window's last answer is now kept across groups and forgotten only when the window closes.
+
+**For Phase 6:** the 51 MB footprint was measured on a long-running copy that had opened Settings. That's just over the 50 MB idle budget (P2), so it should be measured on a fresh launch in Phase 6's performance check.
+
+184 unit tests in total.
+
 ### Phase 6 — Settings and polish
 - **Settings › General:**
   - **Launch at login** toggle, off by default. Uses `SMAppService.mainApp.register()` / `unregister()`. The toggle reads its state from `SMAppService.mainApp.status` rather than a stored flag, so it stays correct if the user changes it in System Settings › General › Login Items. If the status is `.requiresApproval`, show a note with a button that opens Login Items.

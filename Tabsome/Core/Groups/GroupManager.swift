@@ -23,7 +23,9 @@ final class GroupManager {
     @ObservationIgnored private var stripDrag: (group: UUID, startContent: CGRect, startMouse: CGPoint, inFlight: Bool, pending: CGPoint?)?
     /// Tabs being torn out of a strip: the grabbed one (its ghost follows the cursor) and any
     /// others selected with it, in strip order.
-    @ObservationIgnored private var tearOff: (windows: [CGWindowID], window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize)?
+    /// `size` is the group frame's size; `ghost` is the size the grabbed window will actually
+    /// take at that size, which the proxy shows.
+    @ObservationIgnored private var tearOff: (windows: [CGWindowID], window: CGWindowID, group: UUID, proxy: WindowProxy?, size: CGSize, ghost: CGSize)?
     /// Groups whose background tabs are tucked away while the group moves or resizes.
     @ObservationIgnored private var tucked: Set<UUID> = []
     /// What each member did the last time it was asked for its group's frame (§5.5).
@@ -163,7 +165,7 @@ final class GroupManager {
                     return self.scheduleSettleCheck(gid)
                 }
                 Task { @MainActor in
-                    await proxy.spring(to: g.content)
+                    await proxy.spring(to: self.landing(active, at: g.content))
                     self.activateWindow(active)
                     self.scheduleSettleCheck(gid)
                     if let final = await WindowCapture.capture(active) { proxy.crossfade(to: final) }
@@ -307,10 +309,11 @@ final class GroupManager {
     func tearOffBegan(_ ids: [CGWindowID], grabbed id: CGWindowID, cursor: CGPoint) {
         guard let gid = groupOf[id], let g = groups[gid], let entry = registry.windows[id] else { return }
         let windows = ids.filter { groupOf[$0] == gid }
-        let frame = tearOffFrame(cursor: cursor, size: g.content.size)
+        let ghost = landing(id, at: CGRect(origin: .zero, size: g.content.size)).size
+        let frame = tearOffFrame(cursor: cursor, size: ghost)
         let proxy = animates ? WindowProxy(image: nil, appPID: entry.app.pid, appName: entry.app.name, on: frame) : nil
         proxy?.show(at: frame, lifted: true)
-        tearOff = (windows.isEmpty ? [id] : windows, id, gid, proxy, g.content.size)
+        tearOff = (windows.isEmpty ? [id] : windows, id, gid, proxy, g.content.size, ghost)
         targeting?.tabDragBegan(window: id, group: gid, count: max(1, windows.count))
         Task { @MainActor in
             if let image = await WindowCapture.capture(id), self.tearOff?.window == id { proxy?.setImage(image) }
@@ -319,7 +322,7 @@ final class GroupManager {
 
     func tearOffMoved(cursor: CGPoint) {
         guard let t = tearOff else { return }
-        t.proxy?.move(to: tearOffFrame(cursor: cursor, size: t.size))
+        t.proxy?.move(to: tearOffFrame(cursor: cursor, size: t.ghost))
         targeting?.tabDragMoved(to: cursor)
     }
 
@@ -343,7 +346,8 @@ final class GroupManager {
         if t.windows.count > 1 { return formGroup(t.windows, active: t.window, content: frame, proxy: t.proxy) }
         FileLog.shared.write("tear out window=\(t.window)")
         removeMember(t.window, closing: false)
-        setFrame(t.window, frame) { landed in
+        // A lone tab lands where its ghost is, at the size it can take.
+        setFrame(t.window, tearOffFrame(cursor: cursor, size: t.ghost)) { landed in
             self.activateWindow(t.window)
             guard let proxy = t.proxy else { return }
             Task { @MainActor in
@@ -403,7 +407,7 @@ final class GroupManager {
             }
             guard let proxy else { return }
             Task { @MainActor in
-                await proxy.spring(to: g.content)
+                await proxy.spring(to: self.landing(active, at: g.content))
                 await proxy.fadeOut()
             }
         }
@@ -611,7 +615,6 @@ final class GroupManager {
         guard let g = groups.removeValue(forKey: gid) else { return }
         for id in g.members {
             groupOf[id] = nil
-            lastFit[id] = nil
             misfitParked.remove(id)
         }
         resyncTimers.removeValue(forKey: gid)?.invalidate()
@@ -626,9 +629,9 @@ final class GroupManager {
         Task { @MainActor in
             let image = await WindowCapture.capture(last)
             let proxy = image.map { WindowProxy(image: $0, appPID: entry.app.pid, appName: entry.app.name, on: outer) }
-            proxy?.show(at: g.content)
+            proxy?.show(at: self.landing(last, at: g.content))
             self.setFrame(last, outer)
-            await proxy?.spring(to: outer)
+            await proxy?.spring(to: self.landing(last, at: outer))
             if let proxy, let final = await WindowCapture.capture(last) { proxy.crossfade(to: final) }
             await proxy?.fadeOut()
         }
@@ -831,6 +834,7 @@ final class GroupManager {
     private func windowRemoved(_ id: CGWindowID) {
         expected.forget(id)
         fights.forget(id)
+        lastFit[id] = nil
         guard groupOf[id] != nil else { return }
         removeMember(id, closing: true)
     }
@@ -840,7 +844,6 @@ final class GroupManager {
         guard let gid = groupOf.removeValue(forKey: id), var g = groups[gid] else { return }
         let newActive = g.remove(id)
         groups[gid] = g
-        lastFit[id] = nil
         misfitParked.remove(id)
         if g.shouldDissolve { return dissolve(gid) }
         refreshStrip(gid)
@@ -931,6 +934,12 @@ final class GroupManager {
     }
 
     // MARK: Concealment (§5.5)
+
+    /// The frame a window will actually take when asked for `frame` (§5.9 step 5): proxies
+    /// spring there, not to a size the window can't take (Calculator in a big group).
+    func landing(_ id: CGWindowID, at frame: CGRect) -> CGRect {
+        CGRect(origin: frame.origin, size: GroupGeometry.predictedSize(for: frame.size, last: lastFit[id]))
+    }
 
     private func predictedSize(_ id: CGWindowID, _ g: TabGroup) -> CGSize {
         GroupGeometry.predictedSize(for: g.content.size, last: lastFit[id])

@@ -2,6 +2,7 @@
 //   role "main" (default): a window that can hang its main thread on request (spike 7)
 //                          and a drag source that drags a file (spike 9)
 //   role "sink":           two stacked windows; the lower one ("SINK") accepts file drops (spike 9)
+//   role "quiet":          one small window, never activates (the Phase 5d leak test, launched hidden)
 // Controlled by distributed notifications so the spike app needs no extra permissions.
 
 import AppKit
@@ -76,6 +77,12 @@ final class SinkView: NSView {
 final class HelperDelegate: NSObject, NSApplicationDelegate {
     var windows: [NSWindow] = []
     func applicationDidFinishLaunching(_ n: Notification) {
+        if role == "quiet" {
+            let w = makeWindow("LEAK TEST", nsRect(40, 600, 220, 140), color: .systemGray.withAlphaComponent(0.3))
+            w.orderFront(nil)
+            windows = [w]
+            return hlog("ready pid \(getpid())")
+        }
         if role == "sink" {
             let sink = makeWindow("SINK (background tab)", nsRect(420, 320, 640, 400), color: .systemGreen.withAlphaComponent(0.4))
             let sv = SinkView(frame: sink.contentView!.bounds); sv.autoresizingMask = [.width, .height]
