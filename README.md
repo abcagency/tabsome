@@ -5,7 +5,9 @@
 # Tabsome
 
 A macOS menu bar app that turns any windows, from any apps, into browser-style tabs of one window.
-The build plan and every design decision are in [PLAN.md](PLAN.md).
+
+**[Download Tabsome](https://abcagency.github.io/tabsome/)** (macOS 26 or later). The build plan
+and every design decision are in [PLAN.md](PLAN.md).
 
 ## Build, run, test
 
@@ -17,7 +19,7 @@ xcodebuild -project Tabsome.xcodeproj -scheme Tabsome -configuration Debug -deri
 ```
 
 ```bash
-open build/Build/Products/Debug/Tabsome.app
+open "build/Build/Products/Debug/Tabsome Dev.app"
 ```
 
 ```bash
@@ -26,18 +28,39 @@ xcodebuild -project Tabsome.xcodeproj -scheme Tabsome -configuration Debug -deri
 
 Or open `Tabsome.xcodeproj` in Xcode and press ⌘R / ⌘U.
 
-The first launch walks through granting Accessibility (System Settings › Privacy & Security ›
+Debug builds are **Tabsome Dev** (`com.tabsome.app.dev`): a separate app from the release Tabsome,
+with its own Privacy & Security entries, settings, and logs, and with updates turned off. The first
+launch walks through granting Accessibility (System Settings › Privacy & Security ›
 Accessibility). Builds are signed with the same Apple Development identity, so the permission
 survives rebuilds.
 
 **Debug builds** add "Dump Window Registry (Debug)" to the menu. For a scripted check:
 
 ```bash
-open build/Build/Products/Debug/Tabsome.app --args -TabsomeDebugDumpAfter 3 -TabsomeDebugQuitAfterDump YES
+open "build/Build/Products/Debug/Tabsome Dev.app" --args -TabsomeDebugDumpAfter 3 -TabsomeDebugQuitAfterDump YES
 ```
 
-The dump is written to `~/Library/Application Support/Tabsome/Debug/registry-dump.txt`. It is the
-only place window titles appear; logs (`~/Library/Logs/Tabsome`) never contain them.
+The dump is written to `~/Library/Application Support/Tabsome Dev/Debug/registry-dump.txt`. It is
+the only place window titles appear; logs (`~/Library/Logs/Tabsome Dev`) never contain them.
+
+## Releasing
+
+Release builds are signed with the company team's Developer ID and notarized (PLAN.md §7, Phase 7).
+Write the notes in `docs/releases/<version>.md`, then:
+
+```bash
+scripts/release.sh 0.1.2
+```
+
+That archives, exports, notarizes, and staples the app and the DMG, and adds the release to the
+signed update feed (`docs/appcast.xml`), without publishing anything. It needs the `tabsome`
+notarytool profile and the Sparkle key in the login keychain. To publish (it asks first):
+
+```bash
+scripts/publish.sh 0.1.2
+```
+
+The website and the update feed are served by GitHub Pages from `docs/`.
 
 ## Layout
 

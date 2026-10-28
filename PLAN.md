@@ -1056,6 +1056,12 @@ Also fixed two compiler warnings the Release build showed (a deprecated `String(
 - **S7** holds, with one exception now written into the rule: Left mode's rename field sits over the window's edge while the user is typing a name.
 - **S8** holds, with the rule's wording updated: besides its own Application Support, Logs, and Preferences, Tabsome's `Caches` folder holds Sparkle's downloads, and a problem report goes where the user picks. Debug-only code (the distributed-notification hooks, debug defaults, the registry dump) is absent from the release binary.
 
+**7e (2026-10-28): done.** Reviewed by the user and live. The landing page and docs are one static page, `docs/index.html`, served by GitHub Pages at https://abcagency.github.io/tabsome/ next to the update feed:
+- The hero (icon, tagline, **Download for Mac**), an illustration of a tabbed window drawn in CSS, how it works in three steps, what works like browser tabs, the keyboard shortcuts, install steps, privacy, and an FAQ. The FAQ covers the two items §8 asked for (Mission Control and ⌘Tab showing separate windows; Stage Manager), plus windows that won't tab, quitting, reporting a problem, and uninstalling.
+- The Download button reads the newest release from `appcast.xml` on the same site, so the page never needs editing for a release. Without it, the button goes to the latest GitHub release.
+- No build step, no third-party scripts or fonts, no analytics, and no cookies, in keeping with S4. Light and dark follow the system; at phone width nothing scrolls sideways.
+- The README now links the site, describes Tabsome Dev, and documents `release.sh` and `publish.sh`.
+
 
 ## 8. Risks and mitigations
 
