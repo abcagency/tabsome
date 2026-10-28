@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Tabsome</title>
+    <link>https://abcagency.github.io/tabsome/appcast.xml</link>
+    <description>Tabsome updates</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate>Wed, 28 Oct 2026 18:46:36 GMT</pubDate>
+      <sparkle:version>30</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">The first release of Tabsome: tabs for any window, from any app.
+
+- Drag a window over the middle of another one, pause, and let go: they become tabs of one window.
+- Tabs work like browser tabs: click to switch, × or middle-click to close, drag to reorder, and drag one out to make it its own window again. Double-click a tab to rename it.
+- Tabs along the top or down the left side, in three sizes, with app badges and hover previews.
+- Keyboard shortcuts in the browser layout, with ⌃⌥ in place of ⌘ (⌃⌥Tab, ⌃⌥1–9, ⌃⌥W), all rebindable.
+- Quitting Tabsome never closes a window: every group comes apart, and each window is left on its own.
+
+Requires macOS 26 or later. Tabsome needs the Accessibility permission to move windows. Screen Recording is optional and only used for window previews and animations.</description>
+      <enclosure url="https://github.com/abcagency/tabsome/releases/download/v0.1.0/Tabsome-0.1.0.dmg" length="4339245" type="application/octet-stream" sparkle:edSignature="IDRV+AoisFNImX+qAHRZrduKdyvDok75Ix7sI0J25pXw3VxKL70D5TLInxswX2ph4RE7vk9EIEy7MMpTfkbEBg=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: PIXbvMgeSbx4PoOdyUHGRLVVdsHbLTbJQDtYExbyLa7I8rxKGKk641xiWzP3wrhSWqIqAYAgs1qg9bfaOwkNAw==
+length: 2042
+-->
