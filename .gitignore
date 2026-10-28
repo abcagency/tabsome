@@ -32,6 +32,14 @@ Packages/
 *.cer
 *.mobileprovision
 *.provisionprofile
+# App Store Connect API keys, and any exported Sparkle (EdDSA) private key; the Sparkle key
+# lives only in the login keychain (PLAN.md §6.1 S2)
+*.p8
+*.key
+*.pem
+*private*key*
+.env
+.env.*
 
 # Spike build output
 Spikes/**/out/
