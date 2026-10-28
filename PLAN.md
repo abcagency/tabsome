@@ -985,6 +985,8 @@ Checked by script, frame by frame: Fill, return, the quit fan-out, and Fill with
 
 213 unit tests in total. The new ones cover moving a torn-out tab, or a selection, back into its own strip at the marker.
 
+**After Phase 6 (2026-10-28):** unit tests run inside the app, and they had been writing into the user's real log (`~/Library/Logs/Tabsome`). `AppPaths` now points a test run's log and Application Support at a throwaway folder in the temporary directory, so test runs never touch the user's log or recovery file. A test checks that no path a test run uses is under `~/Library`.
+
 ### Phase 7 — Ship
 - **Enroll in the paid Apple Developer Program** (only needed if Tabsome will be shared beyond your own Mac).
 - Developer ID signing, notarization (`notarytool`), and a stapled DMG (`create-dmg`).

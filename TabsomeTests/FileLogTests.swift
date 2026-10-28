@@ -20,3 +20,13 @@ struct FileLogTests {
         #expect(newest.contains("event number 39"))
     }
 }
+
+struct TestRunPathsTests {
+    @Test func testRunsNeverWriteIntoTheUsersFolders() {
+        #expect(AppPaths.isRunningTests)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for url in [AppPaths.logs, AppPaths.applicationSupport, FileLog.shared.directory, RecoveryFile.url] {
+            #expect(!url.path.hasPrefix(home + "/Library/"))
+        }
+    }
+}
