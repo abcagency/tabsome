@@ -7,6 +7,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <description>Tabsome updates</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.1</title>
+      <pubDate>Wed, 28 Oct 2026 19:00:20 GMT</pubDate>
+      <sparkle:version>34</sparkle:version>
+      <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <description sparkle:format="markdown">A maintenance release: nothing changes in how Tabsome works.
+
+- Tabsome 0.1.0 can now be updated through Settings › About › Check for Updates…, or automatically.</description>
+      <enclosure url="https://github.com/abcagency/tabsome/releases/download/v0.1.1/Tabsome-0.1.1.dmg" length="4340721" type="application/octet-stream" sparkle:edSignature="EAXPJs4hpk9TEiQCXljoZy5xHvCjOQjwOHNIbZAX7+/csQofb2L9KF2cE/q+yJgqMhbxwPAIwFHSRL1dRBqJCA=="></enclosure>
+    </item>
+    <item>
       <title>Version 0.1.0</title>
       <pubDate>Wed, 28 Oct 2026 18:46:36 GMT</pubDate>
       <sparkle:version>30</sparkle:version>
@@ -25,6 +36,6 @@ Requires macOS 26 or later. Tabsome needs the Accessibility permission to move w
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: PIXbvMgeSbx4PoOdyUHGRLVVdsHbLTbJQDtYExbyLa7I8rxKGKk641xiWzP3wrhSWqIqAYAgs1qg9bfaOwkNAw==
-length: 2042
+edSignature: ws9pKRX19/AMmTt/6Y9GTDf9KBv4zyWUzWbMW7DR3DPnK6SotLjznyiB+yPxqmFKMEaMc8CHVrv3eAAqNFoqCw==
+length: 2843
 -->
