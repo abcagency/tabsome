@@ -22,7 +22,7 @@ struct SettingsView: View {
                 ShortcutsSettingsView(model: model)
             }
             Tab("About", systemImage: "info.circle", value: "about") {
-                AboutSettingsView()
+                AboutSettingsView(model: model)
             }
         }
         .frame(width: 520)

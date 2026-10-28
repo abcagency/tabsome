@@ -1,8 +1,11 @@
 import SwiftUI
 
-/// Settings › About (PLAN.md §7 Phase 6): the version and acknowledgements. Check for Updates…
-/// and Report a Problem… arrive in Phase 7 with Sparkle and the log viewer.
+/// Settings › About (PLAN.md §7 Phase 6): the version, Report a Problem… (Phase 7a), and
+/// acknowledgements. Check for Updates… arrives with Sparkle in Phase 7c.
 struct AboutSettingsView: View {
+    let model: AppModel
+    @State private var reporting = false
+
     private var version: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
@@ -22,6 +25,8 @@ struct AboutSettingsView: View {
                     Text(version).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("Tabs for any window, from any app.")
                         .foregroundStyle(.secondary)
+                    Button("Report a Problem…") { reporting = true }
+                        .padding(.top, 6)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -32,6 +37,7 @@ struct AboutSettingsView: View {
         }
         .formStyle(.grouped)
         .fitsContent()
+        .sheet(isPresented: $reporting) { ProblemReportView(model: model) }
     }
 }
 

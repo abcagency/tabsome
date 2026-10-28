@@ -255,3 +255,35 @@ final class AppModel {
 
     func showOnboarding() { onboarding.show() }
 }
+
+extension AppModel {
+    /// Report a Problem… (PLAN.md §7 Phase 7a): versions, permissions, and settings, as counts and
+    /// choices only. No window titles, tab names, or app names (S4).
+    var reportFacts: [ProblemReport.Fact] {
+        let info = Bundle.main.infoDictionary
+        let version = "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+        var model = [CChar](repeating: 0, count: 64)
+        var size = model.count
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        let o = stripOptions
+        let all = groups.groups.values
+        func yes(_ b: Bool) -> String { b ? "yes" : "no" }
+        return [
+            .init(name: "Tabsome", value: version),
+            .init(name: "macOS", value: ProcessInfo.processInfo.operatingSystemVersionString),
+            .init(name: "Mac", value: String(cString: model)),
+            .init(name: "Displays", value: "\(NSScreen.screens.count)"),
+            .init(name: "Accessibility", value: permissions.accessibility ? "allowed" : "not allowed"),
+            .init(name: "Screen Recording", value: permissions.screenRecording ? "allowed" : "not allowed"),
+            .init(name: "Paused", value: yes(isPaused)),
+            .init(name: "Groups", value: "\(all.count), \(all.reduce(0) { $0 + $1.count }) tabs"),
+            .init(name: "Tab position", value: tabPlacement.rawValue),
+            .init(name: "Strip", value: "\(o.size.rawValue), min tab width \(Int(o.minTabWidth)), close buttons \(yes(o.showsCloseButtons)), badges \(yes(o.showsBadges))"),
+            .init(name: "Making tabs", value: String(format: "pause %.2f s, middle %d%%", dwellDelay, Int((middleZone * 100).rounded()))),
+            .init(name: "Shortcuts", value: shortcutsEnabled ? "on" : "off"),
+            .init(name: "Excluded apps", value: "\(excludedApps.count)"),
+            .init(name: "Stage Manager", value: StageManager.isOn ? "on" : "off"),
+            .init(name: "Reduce Motion", value: Motion.reduced ? "on" : "off"),
+        ]
+    }
+}

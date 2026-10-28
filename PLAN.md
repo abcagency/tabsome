@@ -995,6 +995,29 @@ Checked by script, frame by frame: Fill, return, the quit fan-out, and Fill with
 - Security review pass: re-check every §6.1 rule against the shipped build.
 - Simple landing page and docs. Licensing or trial (e.g., free core with Pro extras) can be decided later.
 
+#### Phase 7 progress
+Decided (2026-10-28):
+- **Signed and notarized under the company's team:** "ALOYSIUS, BUTLER & CLARK ASSOCIATES, INC.", Team ID `Y6BK74SSGR`. The company's name appears on the signature and in macOS's first-launch dialog. Moving off the personal team changes Tabsome's signature, so macOS asks for Accessibility (and Screen Recording) again, once.
+  - The user is an Admin with access to the team's **cloud-managed Developer ID certificate**, so there's no Developer ID certificate on this Mac: Apple signs during export. Release signing is `xcodebuild archive`, then `xcodebuild -exportArchive -allowProvisioningUpdates` with export options `method developer-id`, `signingStyle automatic`, `teamID Y6BK74SSGR`. A test export (scratch only) came out signed "Developer ID Application: ALOYSIUS, BUTLER & CLARK ASSOCIATES, INC. (Y6BK74SSGR)", hardened runtime on, no `get-task-allow`, and passed `codesign --verify --deep --strict`.
+  - Notarization uses a `notarytool` keychain profile named `tabsome` (`xcrun notarytool store-credentials tabsome --apple-id … --team-id Y6BK74SSGR`, with an app-specific password the user enters). Confirm it exists before 7b notarizes.
+- **Hosting:** DMGs as GitHub Release assets and Sparkle's appcast on GitHub Pages. The `abcagency/tabsome` repo is private, and private release assets can't be downloaded by the public, so 7c decides between a public releases repo and making this one public.
+- **Report a Problem…** saves the log to a file the user picks, after showing it in full (S4). Tabsome sends nothing itself.
+
+Built in five parts, each committed once checked by hand:
+- **7a:** Report a Problem… (Settings › About): the log shown in full, then saved where the user chooses
+- **7b:** Developer ID signing of Release builds, notarization with `notarytool`, stapling, and the DMG, from one release script
+- **7c:** Sparkle 2: the package, EdDSA keys (the private key stays in the login keychain, never in the repo), Check for Updates…, the appcast on GitHub Pages, and the relaunch path through the quit restore
+- **7d:** the security review pass: every §6.1 rule re-checked against a notarized build
+- **7e:** the landing page and docs on GitHub Pages
+
+**7a (2026-10-28): done.** Checked by hand. Settings › About › **Report a Problem…** opens a sheet:
+- A box for what happened, then the rest of the report exactly as it will be saved: a few facts and the whole rotating log, oldest file first. The facts are versions, the Mac model, display count, both permissions, paused, group and tab counts, every Tabs and General setting, whether shortcuts are on, the number of excluded apps (not their names), Stage Manager, and Reduce Motion.
+- Nothing in it can hold a window title, tab name, or app name (S4): the log never records them, and the facts are counts and choices.
+- **Save Report…** opens a save panel ("Tabsome Report 2026-10-28.txt"), writes the file where the user picks, and shows it in Finder. Tabsome sends nothing; the user attaches the file to an email or message. That save is the one file Tabsome writes outside its own folders, and only where the user chose (S8).
+- The report view is an AppKit text view, so a full log (up to about 4 MB) scrolls without lag; the description is kept apart so typing never rebuilds it.
+
+218 unit tests in total. The new ones cover the report's order and layout, reading the log files oldest first, and the file name.
+
 ## 8. Risks and mitigations
 
 | Risk | Mitigation |
