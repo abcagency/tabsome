@@ -26,6 +26,11 @@ NOTES=docs/releases/$VERSION.md
 SPARKLE_KEY=tabsome   # the login keychain account generate_keys stored the key under
 
 step() { print -P "\n%B==> $1%b" }
+# Every copy of the app a build or check touches gets listed in macOS's app database, and System
+# Settings can then show a stale or missing copy for Tabsome (a generic icon in Privacy &
+# Security). Copies this script makes are taken back out.
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+forget() { "$lsregister" -u "$1" >/dev/null 2>&1 || true }
 fail() { print -P "%F{red}error:%f $1" >&2; exit 1 }
 
 [[ -z $(git status --porcelain) ]] || print -P "%F{yellow}warning:%f the working tree has uncommitted changes; this build won't match a commit"
@@ -75,6 +80,7 @@ mkdir -p "$stage"
 ditto "$APP" "$stage/Tabsome.app"
 ln -s /Applications "$stage/Applications"
 hdiutil create -volname "Tabsome $VERSION" -srcfolder "$stage" -fs APFS -format ULFO -ov "$DMG" -quiet
+forget "$stage/Tabsome.app"
 rm -rf "$stage"
 
 step "Notarizing the DMG"
@@ -91,6 +97,7 @@ mount=$(mktemp -d)
 hdiutil attach "$DMG" -readonly -nobrowse -mountpoint "$mount" -quiet
 spctl --assess --type execute --verbose=2 "$mount/Tabsome.app" || { hdiutil detach "$mount" -quiet; fail "the app in the DMG doesn't pass Gatekeeper"; }
 xcrun stapler validate "$mount/Tabsome.app"
+forget "$mount/Tabsome.app"
 hdiutil detach "$mount" -quiet
 
 # Signed after stapling: the EdDSA signature covers the final bytes people download.
@@ -103,6 +110,11 @@ python3 -I scripts/appcast.py docs/appcast.xml "$VERSION" "$BUILD" \
 "$sparkle/sign_update" --account "$SPARKLE_KEY" docs/appcast.xml >/dev/null
 "$sparkle/sign_update" --account "$SPARKLE_KEY" --verify docs/appcast.xml || fail "the feed's signature doesn't verify"
 "$sparkle/sign_update" --account "$SPARKLE_KEY" --verify "$DMG" "$signature" || fail "the DMG's update signature doesn't verify"
+
+for copy in "$APP" "$OUT/Tabsome.xcarchive/Products/Applications/Tabsome.app" \
+  build/release-derived/Build/Intermediates.noindex/ArchiveIntermediates/Tabsome/InstallationBuildProductsLocation/Applications/Tabsome.app; do
+  forget "$copy"
+done
 
 step "Done (not published; run scripts/publish.sh $VERSION)"
 print "  $DMG"
