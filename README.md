@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Design/Icon/Tabsome-appicon-1024.png" alt="Tabsome app icon" width="128" height="128">
+</p>
+
 # Tabsome
 
 A macOS menu bar app that turns any windows, from any apps, into browser-style tabs of one window.
