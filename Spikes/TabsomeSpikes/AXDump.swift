@@ -11,7 +11,7 @@ import ApplicationServices
 enum AXDump {
     static func run(_ args: ArraySlice<String>) {
         guard requireAX() else { return }
-        let target = args.first ?? "com.tabsome.app"
+        let target = args.first ?? "com.tabsome.app.dev"
         let depth = args.dropFirst().first.flatMap(Int.init) ?? 12
         let pid = pid_t(target) ?? NSRunningApplication.runningApplications(withBundleIdentifier: target).first?.processIdentifier
         guard let pid else { return log("no app \(target)") }

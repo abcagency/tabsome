@@ -271,7 +271,7 @@ extension AppModel {
         return [
             .init(name: "Tabsome", value: version),
             .init(name: "macOS", value: ProcessInfo.processInfo.operatingSystemVersionString),
-            .init(name: "Mac", value: String(cString: model)),
+            .init(name: "Mac", value: String(decoding: model.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)),
             .init(name: "Displays", value: "\(NSScreen.screens.count)"),
             .init(name: "Accessibility", value: permissions.accessibility ? "allowed" : "not allowed"),
             .init(name: "Screen Recording", value: permissions.screenRecording ? "allowed" : "not allowed"),

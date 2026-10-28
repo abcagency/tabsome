@@ -6,13 +6,13 @@ import Testing
 struct ProblemReportTests {
     @Test func theDescriptionComesFirstThenFactsThenTheLog() {
         let body = ProblemReport.body(facts: [.init(name: "Tabsome", value: "1.0 (7)"), .init(name: "Displays", value: "2")],
-                                      logs: [("Tabsome.1.log", "old line\n"), ("Tabsome.log", "new line")])
+                                      logs: [("A.1.log", "old line\n"), ("A.log", "new line")])
         let text = ProblemReport.text(description: "  Tabs vanished after sleep.  ", body: body)
-        #expect(text.hasPrefix("Tabsome problem report\n\n## What happened\n\nTabs vanished after sleep.\n"))
+        #expect(text.hasPrefix("\(Brand.name) problem report\n\n## What happened\n\nTabs vanished after sleep.\n"))
         #expect(text.contains("Tabsome   1.0 (7)\nDisplays  2\n"))
         let old = text.range(of: "old line")!, new = text.range(of: "new line")!
         #expect(old.lowerBound < new.lowerBound)
-        #expect(text.hasSuffix("--- Tabsome.log ---\nnew line\n"))
+        #expect(text.hasSuffix("--- A.log ---\nnew line\n"))
     }
 
     @Test func anEmptyDescriptionSaysSo() {
@@ -24,16 +24,17 @@ struct ProblemReportTests {
         let dir = FileManager.default.temporaryDirectory.appending(path: "ProblemReportTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        for (name, text) in [("Tabsome.log", "c"), ("Tabsome.1.log", "b"), ("Tabsome.3.log", "a")] {
+        let n = Brand.name
+        for (name, text) in [("\(n).log", "c"), ("\(n).1.log", "b"), ("\(n).3.log", "a")] {
             try text.write(to: dir.appending(path: name), atomically: true, encoding: .utf8)
         }
         let logs = ProblemReport.logs(in: dir, keep: 3)
-        #expect(logs.map(\.name) == ["Tabsome.3.log", "Tabsome.1.log", "Tabsome.log"])
+        #expect(logs.map(\.name) == ["\(n).3.log", "\(n).1.log", "\(n).log"])
         #expect(logs.map(\.text) == ["a", "b", "c"])
     }
 
     @Test func fileNameCarriesTheDate() {
         let date = ISO8601DateFormatter().date(from: "2026-10-28T12:00:00Z")!
-        #expect(ProblemReport.fileName(on: date) == "Tabsome Report 2026-10-28.txt")
+        #expect(ProblemReport.fileName(on: date) == "\(Brand.name) Report 2026-10-28.txt")
     }
 }

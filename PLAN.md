@@ -1018,6 +1018,22 @@ Built in five parts, each committed once checked by hand:
 
 218 unit tests in total. The new ones cover the report's order and layout, reading the log files oldest first, and the file name.
 
+**7b (2026-10-28): done.** Checked by hand: installed from the DMG, opened without a Gatekeeper warning, and worked like the dev build. `scripts/release.sh [version]` makes a release:
+1. **Archive** the Release configuration. Its build number is the commit count, so each release is newer for Sparkle. Only the app's Release configuration uses the company team (automatic signing, `Y6BK74SSGR`). Debug builds stay on the personal Apple Development certificate, so everyday builds keep their Accessibility and Screen Recording permissions.
+2. **Export** with Developer ID through the team's cloud-managed certificate (`scripts/ExportOptions.plist`).
+3. **Check** the signature: Developer ID of the team, hardened runtime on, no `get-task-allow`, and `codesign --verify --deep --strict`.
+4. **Notarize** the app (`notarytool`, profile `tabsome`) and **staple** it.
+5. **Build the DMG** with `hdiutil` (APFS, compressed): the app and an Applications link. `create-dmg` wasn't needed, so there's no extra tool to install.
+6. **Notarize and staple the DMG**, then check with Gatekeeper: the app, the DMG's ticket, and the app inside the mounted DMG.
+
+`--no-notarize` stops after the signed export. The DMG itself isn't code-signed: signing anything outside Xcode's export needs a Developer ID certificate on this Mac, and the team's is cloud-managed. Gatekeeper checks a downloaded disk image's notarization, and the app inside is signed, notarized, and stapled, so this is enough. If the team later puts a Developer ID certificate on this Mac, the script can sign the DMG too.
+
+First release built: `Tabsome-0.1.0.dmg`, version 0.1.0 (27), 3.6 MB. Both notarizations were accepted in under a minute; Gatekeeper says "Notarized Developer ID" for the app on its own and inside the DMG.
+
+Also fixed two compiler warnings the Release build showed (a deprecated `String(cString:)`, and an unneeded `nonisolated(unsafe)`).
+
+**Debug builds are "Tabsome Dev"** (added during the 7b hand check, at the user's request). Both builds had the bundle ID `com.tabsome.app`, and macOS keeps one Privacy & Security entry per bundle ID, tied to the first signature it saw, so granting the release copy took the permission away from the dev build. Debug builds are now `com.tabsome.app.dev`, and the app itself is **Tabsome Dev.app** (product name "Tabsome Dev", Swift module still `Tabsome`; System Settings' list shows the bundle's name, not its display name, so a display name alone left two entries called "Tabsome"): a separate app to macOS, with its own Accessibility and Screen Recording entries, settings, logs (`~/Library/Logs/Tabsome Dev`), and recovery file. `Brand.name` reads the display name, so onboarding names the right entry. The user's settings were copied to the new ID once. Release builds are unchanged: `com.tabsome.app`, "Tabsome".
+
 ## 8. Risks and mitigations
 
 | Risk | Mitigation |

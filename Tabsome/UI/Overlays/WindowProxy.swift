@@ -9,7 +9,7 @@ import SwiftUI
 @MainActor
 enum WindowCapture {
     /// Screen Recording is allowed. Debug builds can act as if it isn't
-    /// (`defaults write com.tabsome.app TabsomeDebugNoCapture -bool YES`) to check the icon cards.
+    /// (`defaults write com.tabsome.app.dev TabsomeDebugNoCapture -bool YES`) to check the icon cards.
     static var isAllowed: Bool {
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "TabsomeDebugNoCapture") { return false }
@@ -62,7 +62,6 @@ enum WindowCapture {
                 }
                 let filter = SCContentFilter(desktopIndependentWindow: window)
                 SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration(for: window, filter: filter)) { image, _ in
-                    nonisolated(unsafe) let image = image
                     onMain { batch.add(id, image) }
                 }
             }

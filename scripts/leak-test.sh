@@ -8,7 +8,7 @@ set -euo pipefail
 cd "${0:A:h}/.."
 N=${1:-100}
 HELPER=Spikes/out/SpikeHelper.app
-pid=$(pgrep -x Tabsome) || { echo "Tabsome isn't running"; exit 1; }
+pid=$(pgrep -x "Tabsome Dev" || pgrep -x Tabsome) || { echo "Tabsome isn't running"; exit 1; }
 [[ -d $HELPER ]] || { echo "build the helper first: Spikes/build.sh"; exit 1; }
 
 measure() {

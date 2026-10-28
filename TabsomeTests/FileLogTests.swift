@@ -11,7 +11,7 @@ struct FileLogTests {
         log.flush()
 
         let files = try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()
-        #expect(files == ["Tabsome.1.log", "Tabsome.2.log", "Tabsome.log"])
+        #expect(files == ["\(Brand.name).1.log", "\(Brand.name).2.log", "\(Brand.name).log"])
         for f in files {
             let size = try FileManager.default.attributesOfItem(atPath: dir.appending(path: f).path)[.size] as? Int ?? 0
             #expect(size <= 200)

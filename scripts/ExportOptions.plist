@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Release export (PLAN.md §7 Phase 7b): Developer ID, signed through the company team's
+     cloud-managed certificate, so no Developer ID certificate needs to be on this Mac. -->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>developer-id</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>teamID</key>
+    <string>Y6BK74SSGR</string>
+</dict>
+</plist>
