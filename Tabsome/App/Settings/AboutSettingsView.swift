@@ -1,10 +1,15 @@
 import SwiftUI
 
-/// Settings › About (PLAN.md §7 Phase 6): the version, Report a Problem… (Phase 7a), and
-/// acknowledgements. Check for Updates… arrives with Sparkle in Phase 7c.
+/// Settings › About (PLAN.md §7 Phase 6): the version, Check for Updates… (Phase 7c), Report a
+/// Problem… (Phase 7a), and acknowledgements.
 struct AboutSettingsView: View {
     let model: AppModel
     @State private var reporting = false
+
+    /// Sparkle keeps this setting; read it fresh each time.
+    private var checksAutomatically: Binding<Bool> {
+        Binding(get: { model.updates.checksAutomatically }, set: { model.updates.checksAutomatically = $0 })
+    }
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -25,11 +30,27 @@ struct AboutSettingsView: View {
                     Text(version).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("Tabs for any window, from any app.")
                         .foregroundStyle(.secondary)
-                    Button("Report a Problem…") { reporting = true }
-                        .padding(.top, 6)
+                    HStack {
+                        Button("Check for Updates…") { model.updates.checkForUpdates() }
+                            .disabled(!model.updates.canCheck)
+                        Button("Report a Problem…") { reporting = true }
+                    }
+                    .padding(.top, 6)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
+            }
+            Section {
+                if Updates.isAvailable {
+                    Toggle("Check for updates automatically", isOn: checksAutomatically)
+                } else {
+                    Text("Updates are off in \(Brand.name), the development build.")
+                        .foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("Updates come from GitHub, signed so Tabsome installs only real releases. Installing one quits Tabsome the usual way: your tabs come apart and nothing closes.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
             Section("Acknowledgements") {
                 ForEach(Acknowledgement.all) { AcknowledgementRow(item: $0) }

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the generated Info.plist (PLAN.md §7 Phase 7c). Sparkle 2 reads the update feed
+     on GitHub Pages over HTTPS and installs only updates signed with this EdDSA public key; the
+     private key is in the release Mac's login keychain (account "tabsome"), never in the repo (S2). -->
+<plist version="1.0">
+<dict>
+    <key>SUFeedURL</key>
+    <string>https://abcagency.github.io/tabsome/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>m8E8It3qE73bHevIuHqsHjoVkbEJdgRpCcRoBQNpbuM=</string>
+    <key>SUEnableSystemProfiling</key>
+    <false/>
+    <!-- The feed itself is signed too, so an edited feed can't point at an older (still validly
+         signed) version or change the release notes; and an update is verified before it's opened. -->
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+</dict>
+</plist>

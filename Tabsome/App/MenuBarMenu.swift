@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The short menu from PLAN.md §1: Settings… and Quit, plus "Grant Accessibility Permission…"
-/// at the top while the permission is missing.
+/// at the top while the permission is missing, and "Update Available…" while a scheduled check
+/// has found one (Phase 7c).
 struct MenuBarMenu: View {
     let model: AppModel
     @Environment(\.openSettings) private var openSettings
@@ -9,6 +10,10 @@ struct MenuBarMenu: View {
     var body: some View {
         if !model.permissions.accessibility {
             Button("Grant Accessibility Permission…") { model.showOnboarding() }
+            Divider()
+        }
+        if model.updates.updateWaiting {
+            Button("Update Available…") { model.updates.checkForUpdates() }
             Divider()
         }
         Button("Settings…") {

@@ -1034,6 +1034,16 @@ Also fixed two compiler warnings the Release build showed (a deprecated `String(
 
 **Debug builds are "Tabsome Dev"** (added during the 7b hand check, at the user's request). Both builds had the bundle ID `com.tabsome.app`, and macOS keeps one Privacy & Security entry per bundle ID, tied to the first signature it saw, so granting the release copy took the permission away from the dev build. Debug builds are now `com.tabsome.app.dev`, and the app itself is **Tabsome Dev.app** (product name "Tabsome Dev", Swift module still `Tabsome`; System Settings' list shows the bundle's name, not its display name, so a display name alone left two entries called "Tabsome"): a separate app to macOS, with its own Accessibility and Screen Recording entries, settings, logs (`~/Library/Logs/Tabsome Dev`), and recovery file. `Brand.name` reads the display name, so onboarding names the right entry. The user's settings were copied to the new ID once. Release builds are unchanged: `com.tabsome.app`, "Tabsome".
 
+**7c (2026-10-28): built; publishing and the update test wait on the user.**
+- **Sparkle 2.10.0**, pinned exactly (2.10.1 was three days old; dependency bumps are reviewed, S2). Release builds start the updater; Tabsome Dev doesn't, so a dev build never replaces itself with a release.
+- **The key:** EdDSA, generated into the login keychain under the account `tabsome` (not Sparkle's default account, which another project could share). The public key is in `Config/Info.plist`, merged into the generated Info.plist. The private key is never in the repo, and `.gitignore` blocks key files. Back it up off this Mac: losing it means existing users can't get signed updates.
+- **Info.plist:** the feed at `https://abcagency.github.io/tabsome/appcast.xml`, the public key, no system profiling, **a signed feed required** (`SURequireSignedFeed`: an edited feed can't point at an older signed version or change the notes), and **updates verified before they're unpacked** (`SUVerifyUpdateBeforeExtraction`).
+- **In the app:** Settings › About has **Check for Updates…** and "Check for updates automatically" (Sparkle asks on the second launch first). A scheduled check that finds an update while the user is in another app doesn't open a window; the menu shows **Update Available…** (Sparkle's gentle reminders for background apps). Installing quits Tabsome through the usual restore (§5.12), then opens the new version.
+- **`scripts/release.sh`** now also signs the final, stapled DMG with the Sparkle key, adds its entry to `docs/appcast.xml` (`scripts/appcast.py`: newest first, notes from `docs/releases/<version>.md` as Markdown), signs the feed, and verifies both signatures. It publishes nothing.
+- **`scripts/publish.sh <version>`** is the only step that makes anything public, and it asks first: it pushes main, creates the GitHub release with the DMG and notes, then commits and pushes the feed. The DMG goes up before the feed, so the feed never points at a missing file.
+- Checked by script: a Release export embeds Sparkle signed with the team's Developer ID (hardened runtime), the Info.plist carries the feed settings, and a test feed signs, re-signs, and verifies.
+
+
 ## 8. Risks and mitigations
 
 | Risk | Mitigation |

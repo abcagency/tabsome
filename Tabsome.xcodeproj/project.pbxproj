@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D400000000000000F1 /* KeyboardShortcuts in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D400000000000000F2 /* KeyboardShortcuts */; };
+		A1B2C3D400000000000000F4 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D400000000000000F5 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +47,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D400000000000000F1 /* KeyboardShortcuts in Frameworks */,
+				A1B2C3D400000000000000F4 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -117,6 +119,7 @@
 			name = Tabsome;
 			packageProductDependencies = (
 				A1B2C3D400000000000000F2 /* KeyboardShortcuts */,
+				A1B2C3D400000000000000F5 /* Sparkle */,
 			);
 			productName = Tabsome;
 			productReference = A1B2C3D40000000000000004 /* Tabsome.app */;
@@ -175,6 +178,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1B2C3D400000000000000F3 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
+				A1B2C3D400000000000000F6 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1B2C3D4000000000000000F /* Products */;
@@ -317,6 +321,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Tabsome Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -351,6 +356,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Tabsome;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -450,6 +456,14 @@
 				minimumVersion = 3.1.0;
 			};
 		};
+		A1B2C3D400000000000000F6 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -457,6 +471,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A1B2C3D400000000000000F3 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
 			productName = KeyboardShortcuts;
+		};
+		A1B2C3D400000000000000F5 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1B2C3D400000000000000F6 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

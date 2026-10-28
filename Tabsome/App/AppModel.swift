@@ -9,6 +9,7 @@ final class AppModel {
     let groups: GroupManager
     let appearance = AppearanceController()
     let launchAtLogin = LaunchAtLogin()
+    let updates = Updates()
     @ObservationIgnored let hotKeys = HotKeys()
 
     static let tabPlacementKey = "tabPlacement"
