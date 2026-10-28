@@ -5,12 +5,14 @@
 #   2. creates the GitHub release v<version> with the DMG and the release notes
 #   3. commits and pushes the update feed (docs/appcast.xml), which GitHub Pages serves
 # The DMG goes up before the feed, so the feed never points at a file that isn't there yet.
-#   scripts/publish.sh <version>
+#   scripts/publish.sh <version>          asks before publishing
+#   scripts/publish.sh <version> --yes    for when the publish was already approved
 set -euo pipefail
 cd "${0:A:h}/.."
 
 REPO=abcagency/tabsome
-VERSION=${1:?usage: scripts/publish.sh <version>}
+VERSION=${1:?usage: scripts/publish.sh <version> [--yes]}
+CONFIRMED=0; [[ ${2:-} == --yes ]] && CONFIRMED=1
 DMG=build/release/$VERSION/Tabsome-$VERSION.dmg
 NOTES=docs/releases/$VERSION.md
 sparkle=build/release-derived/SourcePackages/artifacts/sparkle/Sparkle/bin
@@ -30,10 +32,12 @@ gh api "repos/$REPO/pages" >/dev/null 2>&1 || print -P "%F{yellow}warning:%f Git
 
 print "About to publish Tabsome $VERSION:"
 print "  - push main to github.com/$REPO"
-print "  - create release v$VERSION with $(basename $DMG) ($(du -h "$DMG" | cut -f1 | tr -d ' ')) and $NOTES"
+print "  - create release v$VERSION with $(basename $DMG) ($(ls -lh "$DMG" | awk '{print $5}')) and $NOTES"
 print "  - commit and push docs/appcast.xml (live at https://abcagency.github.io/tabsome/appcast.xml)"
-read -q "?Publish? [y/N] " || { print "\nNothing published."; exit 1 }
-print
+if (( ! CONFIRMED )); then
+  read -q "?Publish? [y/N] " || { print "\nNothing published."; exit 1 }
+  print
+fi
 
 git push origin main
 gh release create "v$VERSION" "$DMG" --repo $REPO --target "$(git rev-parse HEAD)" \
